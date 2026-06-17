@@ -3,6 +3,7 @@ package com.study.grabthisforme.controller;
 import com.study.grabthisforme.common.ApiResponse;
 import com.study.grabthisforme.common.AuthContext;
 import com.study.grabthisforme.service.PostService;
+import com.study.grabthisforme.service.view.PageView;
 import com.study.grabthisforme.service.view.PostView;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestParam;
 
 @RestController
 @RequestMapping("/api/posts")
@@ -32,6 +34,25 @@ public class PostController {
     @GetMapping("/{postId}")
     public ApiResponse<PostView> getPost(@PathVariable String postId) {
         return ApiResponse.success(postService.getPost(postId, AuthContext.requireUserId()));
+    }
+
+    @GetMapping("/{postId}/comments")
+    public ApiResponse<PageView<PostView.CommentView>> getComments(
+        @PathVariable String postId,
+        @RequestParam(defaultValue = "20") int limit,
+        @RequestParam(defaultValue = "0") int offset
+    ) {
+        return ApiResponse.success(postService.getComments(postId, AuthContext.requireUserId(), limit, offset));
+    }
+
+    @GetMapping("/{postId}/comments/{commentId}/replies")
+    public ApiResponse<PageView<PostView.ReplyView>> getReplies(
+        @PathVariable String postId,
+        @PathVariable long commentId,
+        @RequestParam(defaultValue = "20") int limit,
+        @RequestParam(required = false) Long beforeTime
+    ) {
+        return ApiResponse.success(postService.getReplies(postId, commentId, AuthContext.requireUserId(), limit, beforeTime));
     }
 
     @PostMapping

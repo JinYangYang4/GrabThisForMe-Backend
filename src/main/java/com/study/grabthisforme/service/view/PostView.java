@@ -10,8 +10,7 @@ public record PostView(
     UserView author,
     Integer likeCount,
     Integer commentCount,
-    Boolean likedByCurrentUser,
-    List<CommentView> comments
+    Boolean likedByCurrentUser
 ) {
 
     public record CommentView(
@@ -20,7 +19,7 @@ public record PostView(
         String message,
         List<String> imageUrls,
         UserView commenter,
-        List<ReplyView> replies
+        Integer replyCount
     ) {
     }
 

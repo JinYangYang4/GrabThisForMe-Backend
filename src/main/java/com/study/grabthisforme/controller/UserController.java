@@ -3,6 +3,9 @@ package com.study.grabthisforme.controller;
 import com.study.grabthisforme.common.ApiResponse;
 import com.study.grabthisforme.common.AuthContext;
 import com.study.grabthisforme.service.UserService;
+import com.study.grabthisforme.service.view.UserGoodsSummaryView;
+import com.study.grabthisforme.service.view.UserPostSummaryView;
+import com.study.grabthisforme.service.view.UserStoreSummaryView;
 import com.study.grabthisforme.service.view.UserView;
 import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -36,6 +39,26 @@ public class UserController {
     @GetMapping("/{userId}")
     public ApiResponse<UserView> getUser(@PathVariable long userId) {
         return ApiResponse.success(userService.getUser(userId));
+    }
+
+    @GetMapping("/{userId}/posts")
+    public ApiResponse<List<UserPostSummaryView>> listUserPosts(@PathVariable long userId) {
+        return ApiResponse.success(userService.listUserPosts(userId));
+    }
+
+    @GetMapping("/{userId}/likes/posts")
+    public ApiResponse<List<UserPostSummaryView>> listLikedPosts(@PathVariable long userId) {
+        return ApiResponse.success(userService.listLikedPosts(userId));
+    }
+
+    @GetMapping("/{userId}/likes/stores")
+    public ApiResponse<List<UserStoreSummaryView>> listLikedStores(@PathVariable long userId) {
+        return ApiResponse.success(userService.listLikedStores(userId));
+    }
+
+    @GetMapping("/{userId}/likes/goods")
+    public ApiResponse<List<UserGoodsSummaryView>> listLikedGoods(@PathVariable long userId) {
+        return ApiResponse.success(userService.listLikedGoods(userId));
     }
 
     @PutMapping("/me")

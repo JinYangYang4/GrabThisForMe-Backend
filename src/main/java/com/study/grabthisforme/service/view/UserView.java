@@ -1,7 +1,5 @@
 package com.study.grabthisforme.service.view;
 
-import java.util.List;
-
 public record UserView(
     Long id,
     String accountName,
@@ -14,22 +12,13 @@ public record UserView(
     String signature,
     Long createTime,
     Long lastLoginTime,
-    UserStatisticsView statistics,
-    UserLikesView likes
+    UserStatisticsView statistics
 ) {
 
     public record UserStatisticsView(
         Long likeCount,
         Long fanCount,
-        Long followCount,
-        List<String> selfPosts
-    ) {
-    }
-
-    public record UserLikesView(
-        List<String> likedPostIds,
-        List<Long> likedStoreIds,
-        List<Long> likedGoodsIds
+        Long followCount
     ) {
     }
 }

@@ -15,9 +15,13 @@ import com.study.grabthisforme.persistence.repository.PostReplyRepository;
 import com.study.grabthisforme.persistence.repository.PostStatsRepository;
 import com.study.grabthisforme.persistence.repository.UserLikedPostRepository;
 import com.study.grabthisforme.persistence.repository.UserPostRepository;
+import com.study.grabthisforme.service.view.PageView;
 import com.study.grabthisforme.service.view.PostView;
 import jakarta.transaction.Transactional;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -55,14 +59,63 @@ public class PostService {
 
     public List<PostView> listPosts(Long currentUserId) {
         return postRepository.findAllByOrderByCreateTimeDesc().stream()
-            .map(entity -> viewAssembler.toPostView(entity, currentUserId, true))
+            .map(entity -> viewAssembler.toPostView(entity, currentUserId))
             .toList();
     }
 
     public PostView getPost(String postId, Long currentUserId) {
         PostEntity post = postRepository.findById(postId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40441, "Post not found"));
-        return viewAssembler.toPostView(post, currentUserId, true);
+        return viewAssembler.toPostView(post, currentUserId);
+    }
+
+    public PageView<PostView.CommentView> getComments(String postId, Long currentUserId, int limit, int offset) {
+        postRepository.findById(postId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40441, "Post not found"));
+        int safeLimit = Math.max(1, limit);
+        int safeOffset = Math.max(0, offset);
+        List<PostCommentEntity> commentEntities = postCommentRepository.findAllByPostIdOrderByTimeAsc(
+            postId,
+            PageRequest.of(safeOffset / safeLimit, safeLimit)
+        );
+        Map<Long, Long> replyCountByCommentId = commentEntities.stream()
+            .collect(Collectors.toMap(
+                entity -> entity.commentId,
+                entity -> postReplyRepository.countByParentCommentId(entity.commentId)
+            ));
+        List<PostView.CommentView> items = commentEntities.stream()
+            .map(comment -> viewAssembler.toCommentView(comment, replyCountByCommentId.getOrDefault(comment.commentId, 0L).intValue()))
+            .toList();
+        long total = postCommentRepository.countByPostId(postId);
+        return new PageView<>(items, total, safeLimit, safeOffset, safeOffset + items.size() < total);
+    }
+
+    public PageView<PostView.ReplyView> getReplies(
+        String postId,
+        long commentId,
+        Long currentUserId,
+        int limit,
+        Long beforeTime
+    ) {
+        postRepository.findById(postId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40441, "Post not found"));
+        postCommentRepository.findById(commentId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40443, "Parent comment not found"));
+        int safeLimit = Math.max(1, limit);
+        long safeBeforeTime = beforeTime == null || beforeTime <= 0L
+            ? System.currentTimeMillis() + 1L
+            : beforeTime;
+        List<PostReplyEntity> replyEntities = postReplyRepository.findByParentCommentIdAndTimeLessThanOrderByTimeDesc(
+            commentId,
+            safeBeforeTime,
+            PageRequest.of(0, safeLimit)
+        );
+        List<PostView.ReplyView> items = replyEntities.stream()
+            .map(viewAssembler::toReplyView)
+            .toList();
+        long total = postReplyRepository.countByParentCommentId(commentId);
+        boolean hasMore = items.size() >= safeLimit;
+        return new PageView<>(items, total, safeLimit, 0, hasMore);
     }
 
     @Transactional
@@ -79,7 +132,7 @@ public class PostService {
         stats.commentCount = 0;
         postStatsRepository.save(stats);
         userPostRepository.save(new UserPostEntity(userId, post.postId));
-        return viewAssembler.toPostView(post, userId, true);
+        return viewAssembler.toPostView(post, userId);
     }
 
     @Transactional
@@ -123,10 +176,7 @@ public class PostService {
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40442, "Post stats not found"));
         stats.commentCount = stats.commentCount + 1;
         postStatsRepository.save(stats);
-        return getPost(postId, userId).comments().stream()
-            .filter(comment -> comment.commentId().equals(entity.commentId))
-            .findFirst()
-            .orElseThrow();
+        return viewAssembler.toCommentView(entity, 0);
     }
 
     @Transactional
@@ -162,10 +212,6 @@ public class PostService {
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40442, "Post stats not found"));
         stats.commentCount = stats.commentCount + 1;
         postStatsRepository.save(stats);
-        return getPost(postId, userId).comments().stream()
-            .flatMap(comment -> comment.replies().stream())
-            .filter(reply -> reply.replyId().equals(entity.replyId))
-            .findFirst()
-            .orElseThrow();
+        return viewAssembler.toReplyView(entity);
     }
 }

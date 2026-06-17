@@ -22,9 +22,6 @@ import com.study.grabthisforme.persistence.entity.StoreGoodsCategoryItemEntity;
 import com.study.grabthisforme.persistence.entity.StoreTagEntity;
 import com.study.grabthisforme.persistence.entity.UserAccountEntity;
 import com.study.grabthisforme.persistence.entity.UserGroupRelationEntity;
-import com.study.grabthisforme.persistence.entity.UserLikedGoodsEntity;
-import com.study.grabthisforme.persistence.entity.UserLikedPostEntity;
-import com.study.grabthisforme.persistence.entity.UserLikedStoreEntity;
 import com.study.grabthisforme.persistence.entity.UserPostEntity;
 import com.study.grabthisforme.persistence.entity.UserProfileEntity;
 import com.study.grabthisforme.persistence.entity.UserStatisticsEntity;
@@ -44,9 +41,7 @@ import com.study.grabthisforme.persistence.repository.StoreRepository;
 import com.study.grabthisforme.persistence.repository.StoreTagRepository;
 import com.study.grabthisforme.persistence.repository.UserAccountRepository;
 import com.study.grabthisforme.persistence.repository.UserGroupRelationRepository;
-import com.study.grabthisforme.persistence.repository.UserLikedGoodsRepository;
 import com.study.grabthisforme.persistence.repository.UserLikedPostRepository;
-import com.study.grabthisforme.persistence.repository.UserLikedStoreRepository;
 import com.study.grabthisforme.persistence.repository.UserPostRepository;
 import com.study.grabthisforme.persistence.repository.UserProfileRepository;
 import com.study.grabthisforme.persistence.repository.UserStatisticsRepository;
@@ -79,8 +74,6 @@ public class ViewAssembler {
     private final UserStatisticsRepository userStatisticsRepository;
     private final UserPostRepository userPostRepository;
     private final UserLikedPostRepository userLikedPostRepository;
-    private final UserLikedStoreRepository userLikedStoreRepository;
-    private final UserLikedGoodsRepository userLikedGoodsRepository;
     private final GoodsBaseRepository goodsBaseRepository;
     private final GoodsPriceRepository goodsPriceRepository;
     private final GoodsUiRepository goodsUiRepository;
@@ -103,8 +96,6 @@ public class ViewAssembler {
         UserStatisticsRepository userStatisticsRepository,
         UserPostRepository userPostRepository,
         UserLikedPostRepository userLikedPostRepository,
-        UserLikedStoreRepository userLikedStoreRepository,
-        UserLikedGoodsRepository userLikedGoodsRepository,
         GoodsBaseRepository goodsBaseRepository,
         GoodsPriceRepository goodsPriceRepository,
         GoodsUiRepository goodsUiRepository,
@@ -126,8 +117,6 @@ public class ViewAssembler {
         this.userStatisticsRepository = userStatisticsRepository;
         this.userPostRepository = userPostRepository;
         this.userLikedPostRepository = userLikedPostRepository;
-        this.userLikedStoreRepository = userLikedStoreRepository;
-        this.userLikedGoodsRepository = userLikedGoodsRepository;
         this.goodsBaseRepository = goodsBaseRepository;
         this.goodsPriceRepository = goodsPriceRepository;
         this.goodsUiRepository = goodsUiRepository;
@@ -171,30 +160,6 @@ public class ViewAssembler {
             .stream()
             .collect(Collectors.toMap(entity -> entity.userId, entity -> entity));
 
-        Map<Long, List<String>> selfPosts = new HashMap<>();
-        Map<Long, List<String>> likedPostIds = new HashMap<>();
-        Map<Long, List<Long>> likedStoreIds = new HashMap<>();
-        Map<Long, List<Long>> likedGoodsIds = new HashMap<>();
-
-        for (Long userId : distinctIds) {
-            selfPosts.put(
-                userId,
-                userPostRepository.findAllByUserId(userId).stream().map(entity -> entity.postId).toList()
-            );
-            likedPostIds.put(
-                userId,
-                userLikedPostRepository.findAllByUserId(userId).stream().map(entity -> entity.postId).toList()
-            );
-            likedStoreIds.put(
-                userId,
-                userLikedStoreRepository.findAllByUserId(userId).stream().map(entity -> entity.storeId).toList()
-            );
-            likedGoodsIds.put(
-                userId,
-                userLikedGoodsRepository.findAllByUserId(userId).stream().map(entity -> entity.goodsId).toList()
-            );
-        }
-
         Map<Long, UserView> result = new LinkedHashMap<>();
         for (Long userId : distinctIds) {
             UserAccountEntity account = accounts.get(userId);
@@ -218,13 +183,7 @@ public class ViewAssembler {
                 new UserView.UserStatisticsView(
                     stat == null ? 0L : stat.likeCount,
                     stat == null ? 0L : stat.fanCount,
-                    stat == null ? 0L : stat.followCount,
-                    selfPosts.getOrDefault(userId, List.of())
-                ),
-                new UserView.UserLikesView(
-                    likedPostIds.getOrDefault(userId, List.of()),
-                    likedStoreIds.getOrDefault(userId, List.of()),
-                    likedGoodsIds.getOrDefault(userId, List.of())
+                    stat == null ? 0L : stat.followCount
                 )
             ));
         }
@@ -405,45 +364,13 @@ public class ViewAssembler {
         );
     }
 
-    public PostView toPostView(PostEntity entity, Long currentUserId, boolean includeComments) {
+    public PostView toPostView(PostEntity entity, Long currentUserId) {
         UserPostEntity userPostEntity = userPostRepository.findByPostId(entity.postId);
         Long authorId = userPostEntity == null ? null : userPostEntity.userId;
         UserView author = getUserView(authorId);
         PostStatsEntity postStats = postStatsRepository.findById(entity.postId).orElse(null);
         boolean likedByCurrentUser = currentUserId != null
             && userLikedPostRepository.findByUserIdAndPostId(currentUserId, entity.postId).isPresent();
-
-        List<PostView.CommentView> comments = List.of();
-        if (includeComments) {
-            List<PostCommentEntity> commentEntities = postCommentRepository.findAllByPostIdOrderByTimeAsc(entity.postId);
-            List<PostReplyEntity> replyEntities = postReplyRepository.findAllByPostIdOrderByTimeAsc(entity.postId);
-            Map<Long, List<PostReplyEntity>> repliesByCommentId = replyEntities.stream()
-                .collect(Collectors.groupingBy(reply -> reply.parentCommentId));
-            comments = commentEntities.stream()
-                .map(comment -> {
-                    List<PostView.ReplyView> replies = repliesByCommentId.getOrDefault(comment.commentId, List.of()).stream()
-                        .map(reply -> new PostView.ReplyView(
-                            reply.replyId,
-                            reply.parentCommentId,
-                            reply.parentReplyId,
-                            reply.time,
-                            reply.message,
-                            Jsons.readStringList(reply.imageUrlsJson),
-                            getUserView(reply.commenterId),
-                            getUserView(reply.beCommenterId)
-                        ))
-                        .toList();
-                    return new PostView.CommentView(
-                        comment.commentId,
-                        comment.time,
-                        comment.message,
-                        Jsons.readStringList(comment.imageUrlsJson),
-                        getUserView(comment.commenterId),
-                        replies
-                    );
-                })
-                .toList();
-        }
 
         return new PostView(
             entity.postId,
@@ -453,8 +380,31 @@ public class ViewAssembler {
             author,
             postStats == null ? 0 : postStats.likeCount,
             postStats == null ? 0 : postStats.commentCount,
-            likedByCurrentUser,
-            comments
+            likedByCurrentUser
+        );
+    }
+
+    public PostView.CommentView toCommentView(PostCommentEntity entity, int replyCount) {
+        return new PostView.CommentView(
+            entity.commentId,
+            entity.time,
+            entity.message,
+            Jsons.readStringList(entity.imageUrlsJson),
+            getUserView(entity.commenterId),
+            replyCount
+        );
+    }
+
+    public PostView.ReplyView toReplyView(PostReplyEntity entity) {
+        return new PostView.ReplyView(
+            entity.replyId,
+            entity.parentCommentId,
+            entity.parentReplyId,
+            entity.time,
+            entity.message,
+            Jsons.readStringList(entity.imageUrlsJson),
+            getUserView(entity.commenterId),
+            getUserView(entity.beCommenterId)
         );
     }
 
