@@ -12,7 +12,10 @@ target/
 .settings
 .springBeans
 .sts4-cache
-
+# SQLite 数据库临时文件
+data/*.db
+data/*.lock.db
+*.lock.db
 ### IntelliJ IDEA ###
 .idea
 *.iws
