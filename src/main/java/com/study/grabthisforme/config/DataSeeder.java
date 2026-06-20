@@ -13,6 +13,7 @@ import com.study.grabthisforme.persistence.entity.GoodsStateEntity;
 import com.study.grabthisforme.persistence.entity.GoodsUiEntity;
 import com.study.grabthisforme.persistence.entity.MessageEntity;
 import com.study.grabthisforme.persistence.entity.OrderEntity;
+import com.study.grabthisforme.persistence.entity.PostCustomTagEntity;
 import com.study.grabthisforme.persistence.entity.PostEntity;
 import com.study.grabthisforme.persistence.entity.PostStatsEntity;
 import com.study.grabthisforme.persistence.entity.SecondhandTradeEntity;
@@ -36,6 +37,7 @@ import com.study.grabthisforme.persistence.repository.GoodsStateRepository;
 import com.study.grabthisforme.persistence.repository.GoodsUiRepository;
 import com.study.grabthisforme.persistence.repository.MessageRepository;
 import com.study.grabthisforme.persistence.repository.OrderRepository;
+import com.study.grabthisforme.persistence.repository.PostCustomTagRepository;
 import com.study.grabthisforme.persistence.repository.PostRepository;
 import com.study.grabthisforme.persistence.repository.PostStatsRepository;
 import com.study.grabthisforme.persistence.repository.SecondhandTradeRepository;
@@ -71,6 +73,7 @@ public class DataSeeder {
         GoodsStateRepository goodsStateRepository,
         SecondhandTradeRepository secondhandTradeRepository,
         PostRepository postRepository,
+        PostCustomTagRepository postCustomTagRepository,
         PostStatsRepository postStatsRepository,
         UserPostRepository userPostRepository,
         UserFriendRelationRepository userFriendRelationRepository,
@@ -149,8 +152,11 @@ public class DataSeeder {
             post.postId = "POST_BOOTSTRAP";
             post.content = "今天晚上谁顺路帮忙带一瓶可乐？";
             post.imagesJson = Jsons.writeStringList(java.util.List.of());
+            post.categoryKey = "SHARE";
             post.createTime = now;
             postRepository.save(post);
+            postCustomTagRepository.save(new PostCustomTagEntity(post.postId, "宿舍", "宿舍", 0, now));
+            postCustomTagRepository.save(new PostCustomTagEntity(post.postId, "饮料", "饮料", 1, now));
             PostStatsEntity postStats = new PostStatsEntity();
             postStats.postId = post.postId;
             postStats.likeCount = 2;
@@ -208,7 +214,7 @@ public class DataSeeder {
             order.goodsPrice = 3.0;
             order.goodsPic = "";
             order.shelfNumber = "A-01";
-            order.aimPosition = "2栋201";
+            order.aimPosition = "2栋 201";
             order.atPosition = "超市门口";
             order.startTime = now;
             order.endTime = now + 3_600_000L;

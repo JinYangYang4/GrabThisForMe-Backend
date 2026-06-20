@@ -12,6 +12,7 @@ public class PostEntity {
     public String postId;
     public String content;
     public String imagesJson;
+    public String categoryKey;
     public Long createTime;
 
     public PostEntity() {

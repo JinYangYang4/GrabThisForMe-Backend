@@ -60,7 +60,9 @@ public class PostController {
         return ApiResponse.success(postService.createPost(
             AuthContext.requireUserId(),
             request.content(),
-            request.images()
+            request.images(),
+            request.categoryKey(),
+            request.customTags()
         ));
     }
 
@@ -100,7 +102,9 @@ public class PostController {
 
     public record CreatePostRequest(
         @NotBlank(message = "content is required") String content,
-        List<String> images
+        List<String> images,
+        String categoryKey,
+        List<String> customTags
     ) {
     }
 

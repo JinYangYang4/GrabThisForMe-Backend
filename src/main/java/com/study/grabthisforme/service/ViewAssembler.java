@@ -32,6 +32,7 @@ import com.study.grabthisforme.persistence.repository.GoodsStateRepository;
 import com.study.grabthisforme.persistence.repository.GoodsUiRepository;
 import com.study.grabthisforme.persistence.repository.MessageRepository;
 import com.study.grabthisforme.persistence.repository.PostCommentRepository;
+import com.study.grabthisforme.persistence.repository.PostCustomTagRepository;
 import com.study.grabthisforme.persistence.repository.PostReplyRepository;
 import com.study.grabthisforme.persistence.repository.PostStatsRepository;
 import com.study.grabthisforme.persistence.repository.SecondhandTradeRepository;
@@ -86,6 +87,7 @@ public class ViewAssembler {
     private final PostStatsRepository postStatsRepository;
     private final PostCommentRepository postCommentRepository;
     private final PostReplyRepository postReplyRepository;
+    private final PostCustomTagRepository postCustomTagRepository;
     private final ChatGroupRepository chatGroupRepository;
     private final UserGroupRelationRepository userGroupRelationRepository;
 
@@ -108,6 +110,7 @@ public class ViewAssembler {
         PostStatsRepository postStatsRepository,
         PostCommentRepository postCommentRepository,
         PostReplyRepository postReplyRepository,
+        PostCustomTagRepository postCustomTagRepository,
         ChatGroupRepository chatGroupRepository,
         UserGroupRelationRepository userGroupRelationRepository
     ) {
@@ -129,6 +132,7 @@ public class ViewAssembler {
         this.postStatsRepository = postStatsRepository;
         this.postCommentRepository = postCommentRepository;
         this.postReplyRepository = postReplyRepository;
+        this.postCustomTagRepository = postCustomTagRepository;
         this.chatGroupRepository = chatGroupRepository;
         this.userGroupRelationRepository = userGroupRelationRepository;
     }
@@ -374,6 +378,8 @@ public class ViewAssembler {
             entity.content,
             Jsons.readStringList(entity.imagesJson),
             entity.createTime,
+            entity.categoryKey == null ? "" : entity.categoryKey,
+            getPostCustomTags(entity.postId),
             authorId == null ? 0L : authorId,
             author == null ? "" : author.name(),
             author == null ? "" : author.headPic(),
@@ -395,6 +401,8 @@ public class ViewAssembler {
             entity.content,
             Jsons.readStringList(entity.imagesJson),
             entity.createTime,
+            entity.categoryKey == null ? "" : entity.categoryKey,
+            getPostCustomTags(entity.postId),
             author,
             postStats == null ? 0 : postStats.likeCount,
             postStats == null ? 0 : postStats.commentCount,
@@ -479,5 +487,11 @@ public class ViewAssembler {
         }
         return messageRepository.findAllByMessageIdIn(distinctIds).stream()
             .collect(Collectors.toMap(entity -> entity.messageId, entity -> entity));
+    }
+
+    private List<String> getPostCustomTags(String postId) {
+        return postCustomTagRepository.findAllByPostIdOrderBySortOrderAsc(postId).stream()
+            .map(entity -> entity.tag)
+            .toList();
     }
 }

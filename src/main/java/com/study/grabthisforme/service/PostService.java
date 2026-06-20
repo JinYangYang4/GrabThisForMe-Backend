@@ -4,12 +4,14 @@ import com.study.grabthisforme.common.ApiException;
 import com.study.grabthisforme.common.IdGenerator;
 import com.study.grabthisforme.common.Jsons;
 import com.study.grabthisforme.persistence.entity.PostCommentEntity;
+import com.study.grabthisforme.persistence.entity.PostCustomTagEntity;
 import com.study.grabthisforme.persistence.entity.PostEntity;
 import com.study.grabthisforme.persistence.entity.PostReplyEntity;
 import com.study.grabthisforme.persistence.entity.PostStatsEntity;
 import com.study.grabthisforme.persistence.entity.UserLikedPostEntity;
 import com.study.grabthisforme.persistence.entity.UserPostEntity;
 import com.study.grabthisforme.persistence.repository.PostCommentRepository;
+import com.study.grabthisforme.persistence.repository.PostCustomTagRepository;
 import com.study.grabthisforme.persistence.repository.PostRepository;
 import com.study.grabthisforme.persistence.repository.PostReplyRepository;
 import com.study.grabthisforme.persistence.repository.PostStatsRepository;
@@ -18,7 +20,10 @@ import com.study.grabthisforme.persistence.repository.UserPostRepository;
 import com.study.grabthisforme.service.view.PageView;
 import com.study.grabthisforme.service.view.PostView;
 import jakarta.transaction.Transactional;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 import org.springframework.data.domain.PageRequest;
@@ -28,10 +33,15 @@ import org.springframework.stereotype.Service;
 @Service
 public class PostService {
 
+    private static final int MAX_CUSTOM_TAG_COUNT = 3;
+    private static final int MAX_CUSTOM_TAG_LENGTH = 10;
+    private static final String DEFAULT_CATEGORY_KEY = "GOSSIP";
+
     private final PostRepository postRepository;
     private final PostStatsRepository postStatsRepository;
     private final PostCommentRepository postCommentRepository;
     private final PostReplyRepository postReplyRepository;
+    private final PostCustomTagRepository postCustomTagRepository;
     private final UserPostRepository userPostRepository;
     private final UserLikedPostRepository userLikedPostRepository;
     private final IdGenerator idGenerator;
@@ -42,6 +52,7 @@ public class PostService {
         PostStatsRepository postStatsRepository,
         PostCommentRepository postCommentRepository,
         PostReplyRepository postReplyRepository,
+        PostCustomTagRepository postCustomTagRepository,
         UserPostRepository userPostRepository,
         UserLikedPostRepository userLikedPostRepository,
         IdGenerator idGenerator,
@@ -51,6 +62,7 @@ public class PostService {
         this.postStatsRepository = postStatsRepository;
         this.postCommentRepository = postCommentRepository;
         this.postReplyRepository = postReplyRepository;
+        this.postCustomTagRepository = postCustomTagRepository;
         this.userPostRepository = userPostRepository;
         this.userLikedPostRepository = userLikedPostRepository;
         this.idGenerator = idGenerator;
@@ -129,13 +141,17 @@ public class PostService {
     }
 
     @Transactional
-    public PostView createPost(long userId, String content, List<String> images) {
+    public PostView createPost(long userId, String content, List<String> images, String categoryKey, List<String> customTags) {
         PostEntity post = new PostEntity();
         post.postId = idGenerator.nextPostId();
         post.content = content == null ? "" : content.trim();
         post.imagesJson = Jsons.writeStringList(images);
+        post.categoryKey = normalizeCategoryKey(categoryKey);
         post.createTime = System.currentTimeMillis();
         postRepository.save(post);
+
+        saveCustomTags(post.postId, customTags, post.createTime);
+
         PostStatsEntity stats = new PostStatsEntity();
         stats.postId = post.postId;
         stats.likeCount = 0;
@@ -223,5 +239,62 @@ public class PostService {
         stats.commentCount = stats.commentCount + 1;
         postStatsRepository.save(stats);
         return viewAssembler.toReplyView(entity);
+    }
+
+    private void saveCustomTags(String postId, List<String> customTags, long createTime) {
+        postCustomTagRepository.deleteAllByPostId(postId);
+        List<PostCustomTagEntity> entities = normalizeCustomTags(customTags).stream()
+            .map(entry -> new PostCustomTagEntity(
+                postId,
+                entry.displayTag(),
+                entry.normalizedTag(),
+                entry.sortOrder(),
+                createTime
+            ))
+            .toList();
+        if (!entities.isEmpty()) {
+            postCustomTagRepository.saveAll(entities);
+        }
+    }
+
+    private String normalizeCategoryKey(String categoryKey) {
+        if (categoryKey == null || categoryKey.isBlank()) {
+            return DEFAULT_CATEGORY_KEY;
+        }
+        return categoryKey.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private List<NormalizedTag> normalizeCustomTags(List<String> customTags) {
+        if (customTags == null || customTags.isEmpty()) {
+            return List.of();
+        }
+        Map<String, String> deduplicated = new LinkedHashMap<>();
+        for (String rawTag : customTags) {
+            if (rawTag == null) {
+                continue;
+            }
+            String displayTag = rawTag.trim().replaceAll("\\s+", " ");
+            if (displayTag.isBlank()) {
+                continue;
+            }
+            if (displayTag.length() > MAX_CUSTOM_TAG_LENGTH) {
+                displayTag = displayTag.substring(0, MAX_CUSTOM_TAG_LENGTH);
+            }
+            String normalizedTag = displayTag.toLowerCase(Locale.ROOT);
+            deduplicated.putIfAbsent(normalizedTag, displayTag);
+            if (deduplicated.size() >= MAX_CUSTOM_TAG_COUNT) {
+                break;
+            }
+        }
+        List<NormalizedTag> result = new ArrayList<>();
+        int sortOrder = 0;
+        for (Map.Entry<String, String> entry : deduplicated.entrySet()) {
+            result.add(new NormalizedTag(entry.getValue(), entry.getKey(), sortOrder));
+            sortOrder++;
+        }
+        return result;
+    }
+
+    private record NormalizedTag(String displayTag, String normalizedTag, int sortOrder) {
     }
 }
