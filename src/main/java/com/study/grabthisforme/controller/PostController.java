@@ -27,7 +27,7 @@ public class PostController {
     }
 
     @GetMapping
-    public ApiResponse<List<PostView>> listPosts() {
+    public ApiResponse<List<PostView.PostSummaryView>> listPosts() {
         return ApiResponse.success(postService.listPosts(AuthContext.requireUserId()));
     }
 

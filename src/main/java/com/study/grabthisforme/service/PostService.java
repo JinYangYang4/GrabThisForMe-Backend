@@ -57,9 +57,9 @@ public class PostService {
         this.viewAssembler = viewAssembler;
     }
 
-    public List<PostView> listPosts(Long currentUserId) {
+    public List<PostView.PostSummaryView> listPosts(Long currentUserId) {
         return postRepository.findAllByOrderByCreateTimeDesc().stream()
-            .map(entity -> viewAssembler.toPostView(entity, currentUserId))
+            .map(viewAssembler::toPostSummaryView)
             .toList();
     }
 

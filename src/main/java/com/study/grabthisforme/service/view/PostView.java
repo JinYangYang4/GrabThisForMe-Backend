@@ -13,6 +13,19 @@ public record PostView(
     Boolean likedByCurrentUser
 ) {
 
+    public record PostSummaryView(
+        String postId,
+        String content,
+        List<String> images,
+        Long createTime,
+        Long authorId,
+        String authorName,
+        String authorAvatarUrl,
+        Integer likeCount,
+        Integer commentCount
+    ) {
+    }
+
     public record CommentView(
         Long commentId,
         Long time,

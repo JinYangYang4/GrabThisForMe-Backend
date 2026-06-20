@@ -57,7 +57,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -361,6 +360,25 @@ public class ViewAssembler {
             entity.endTime,
             entity.orderStatus,
             entity.isAccepted
+        );
+    }
+
+    public PostView.PostSummaryView toPostSummaryView(PostEntity entity) {
+        UserPostEntity userPostEntity = userPostRepository.findByPostId(entity.postId);
+        Long authorId = userPostEntity == null ? null : userPostEntity.userId;
+        UserView author = getUserView(authorId);
+        PostStatsEntity postStats = postStatsRepository.findById(entity.postId).orElse(null);
+
+        return new PostView.PostSummaryView(
+            entity.postId,
+            entity.content,
+            Jsons.readStringList(entity.imagesJson),
+            entity.createTime,
+            authorId == null ? 0L : authorId,
+            author == null ? "" : author.name(),
+            author == null ? "" : author.headPic(),
+            postStats == null ? 0 : postStats.likeCount,
+            postStats == null ? 0 : postStats.commentCount
         );
     }
 
