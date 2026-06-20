@@ -13,8 +13,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/posts")
@@ -40,9 +40,9 @@ public class PostController {
     public ApiResponse<PageView<PostView.CommentView>> getComments(
         @PathVariable String postId,
         @RequestParam(defaultValue = "20") int limit,
-        @RequestParam(defaultValue = "0") int offset
+        @RequestParam(required = false) Long beforeTime
     ) {
-        return ApiResponse.success(postService.getComments(postId, AuthContext.requireUserId(), limit, offset));
+        return ApiResponse.success(postService.getComments(postId, AuthContext.requireUserId(), limit, beforeTime));
     }
 
     @GetMapping("/{postId}/comments/{commentId}/replies")

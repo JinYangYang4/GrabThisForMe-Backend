@@ -69,15 +69,22 @@ public class PostService {
         return viewAssembler.toPostView(post, currentUserId);
     }
 
-    public PageView<PostView.CommentView> getComments(String postId, Long currentUserId, int limit, int offset) {
+    public PageView<PostView.CommentView> getComments(String postId, Long currentUserId, int limit, Long beforeTime) {
         postRepository.findById(postId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40441, "Post not found"));
         int safeLimit = Math.max(1, limit);
-        int safeOffset = Math.max(0, offset);
-        List<PostCommentEntity> commentEntities = postCommentRepository.findAllByPostIdOrderByTimeAsc(
+        long safeBeforeTime = beforeTime == null || beforeTime <= 0L
+            ? System.currentTimeMillis() + 1L
+            : beforeTime;
+        List<PostCommentEntity> fetchedComments = postCommentRepository.findByPostIdAndTimeLessThanOrderByTimeDesc(
             postId,
-            PageRequest.of(safeOffset / safeLimit, safeLimit)
+            safeBeforeTime,
+            PageRequest.of(0, safeLimit + 1)
         );
+        boolean hasMore = fetchedComments.size() > safeLimit;
+        List<PostCommentEntity> commentEntities = hasMore
+            ? fetchedComments.subList(0, safeLimit)
+            : fetchedComments;
         Map<Long, Long> replyCountByCommentId = commentEntities.stream()
             .collect(Collectors.toMap(
                 entity -> entity.commentId,
@@ -87,7 +94,7 @@ public class PostService {
             .map(comment -> viewAssembler.toCommentView(comment, replyCountByCommentId.getOrDefault(comment.commentId, 0L).intValue()))
             .toList();
         long total = postCommentRepository.countByPostId(postId);
-        return new PageView<>(items, total, safeLimit, safeOffset, safeOffset + items.size() < total);
+        return new PageView<>(items, total, safeLimit, 0, hasMore);
     }
 
     public PageView<PostView.ReplyView> getReplies(
@@ -105,16 +112,19 @@ public class PostService {
         long safeBeforeTime = beforeTime == null || beforeTime <= 0L
             ? System.currentTimeMillis() + 1L
             : beforeTime;
-        List<PostReplyEntity> replyEntities = postReplyRepository.findByParentCommentIdAndTimeLessThanOrderByTimeDesc(
+        List<PostReplyEntity> fetchedReplies = postReplyRepository.findByParentCommentIdAndTimeLessThanOrderByTimeDesc(
             commentId,
             safeBeforeTime,
-            PageRequest.of(0, safeLimit)
+            PageRequest.of(0, safeLimit + 1)
         );
+        boolean hasMore = fetchedReplies.size() > safeLimit;
+        List<PostReplyEntity> replyEntities = hasMore
+            ? fetchedReplies.subList(0, safeLimit)
+            : fetchedReplies;
         List<PostView.ReplyView> items = replyEntities.stream()
             .map(viewAssembler::toReplyView)
             .toList();
         long total = postReplyRepository.countByParentCommentId(commentId);
-        boolean hasMore = items.size() >= safeLimit;
         return new PageView<>(items, total, safeLimit, 0, hasMore);
     }
 
