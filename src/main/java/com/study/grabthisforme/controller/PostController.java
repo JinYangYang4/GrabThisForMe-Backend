@@ -27,8 +27,17 @@ public class PostController {
     }
 
     @GetMapping
-    public ApiResponse<List<PostView.PostSummaryView>> listPosts() {
-        return ApiResponse.success(postService.listPosts(AuthContext.requireUserId()));
+    public ApiResponse<PageView<PostView.PostSummaryView>> listPosts(
+        @RequestParam(defaultValue = "20") int limit,
+        @RequestParam(required = false) Long beforeTime,
+        @RequestParam(required = false) String categoryKey
+    ) {
+        return ApiResponse.success(postService.listPosts(
+            AuthContext.requireUserId(),
+            limit,
+            beforeTime,
+            categoryKey
+        ));
     }
 
     @GetMapping("/{postId}")

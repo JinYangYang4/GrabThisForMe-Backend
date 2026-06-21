@@ -69,10 +69,40 @@ public class PostService {
         this.viewAssembler = viewAssembler;
     }
 
-    public List<PostView.PostSummaryView> listPosts(Long currentUserId) {
-        return postRepository.findAllByOrderByCreateTimeDesc().stream()
+    public PageView<PostView.PostSummaryView> listPosts(
+        Long currentUserId,
+        int limit,
+        Long beforeTime,
+        String categoryKey
+    ) {
+        int safeLimit = Math.max(1, limit);
+        long safeBeforeTime = beforeTime == null || beforeTime <= 0L
+            ? System.currentTimeMillis() + 1L
+            : beforeTime;
+        String normalizedCategoryKey = normalizeFilterCategoryKey(categoryKey);
+
+        List<PostEntity> fetchedPosts = normalizedCategoryKey == null
+            ? postRepository.findByCreateTimeLessThanOrderByCreateTimeDesc(
+                safeBeforeTime,
+                PageRequest.of(0, safeLimit + 1)
+            )
+            : postRepository.findByCategoryKeyAndCreateTimeLessThanOrderByCreateTimeDesc(
+                normalizedCategoryKey,
+                safeBeforeTime,
+                PageRequest.of(0, safeLimit + 1)
+            );
+
+        boolean hasMore = fetchedPosts.size() > safeLimit;
+        List<PostEntity> postEntities = hasMore
+            ? fetchedPosts.subList(0, safeLimit)
+            : fetchedPosts;
+        List<PostView.PostSummaryView> items = postEntities.stream()
             .map(viewAssembler::toPostSummaryView)
             .toList();
+        long total = normalizedCategoryKey == null
+            ? postRepository.count()
+            : postRepository.countByCategoryKey(normalizedCategoryKey);
+        return new PageView<>(items, total, safeLimit, 0, hasMore);
     }
 
     public PostView getPost(String postId, Long currentUserId) {
@@ -260,6 +290,13 @@ public class PostService {
     private String normalizeCategoryKey(String categoryKey) {
         if (categoryKey == null || categoryKey.isBlank()) {
             return DEFAULT_CATEGORY_KEY;
+        }
+        return categoryKey.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private String normalizeFilterCategoryKey(String categoryKey) {
+        if (categoryKey == null || categoryKey.isBlank()) {
+            return null;
         }
         return categoryKey.trim().toUpperCase(Locale.ROOT);
     }
