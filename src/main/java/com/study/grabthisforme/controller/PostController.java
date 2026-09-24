@@ -22,8 +22,36 @@ public class PostController {
 
     private final PostService postService;
 
-    public PostController(PostService postService) {
+    private final com.study.grabthisforme.service.PostSearchService postSearchService;
+
+    private final com.study.grabthisforme.service.CommentSendService commentSends;
+
+    public PostController(PostService postService, com.study.grabthisforme.service.PostSearchService postSearchService,
+            com.study.grabthisforme.service.CommentSendService commentSends) {
+        this.commentSends = commentSends;
         this.postService = postService;
+        this.postSearchService = postSearchService;
+    }
+
+    @GetMapping("/send-capabilities")
+    public ApiResponse<Integer> sendCapabilities() {
+        AuthContext.requireUserId();
+        return ApiResponse.success(1);
+    }
+
+    @GetMapping("/search")
+    public ApiResponse<com.study.grabthisforme.service.PostSearchService.SearchPage> searchPosts(
+        @RequestParam String keyword,
+        @RequestParam(required = false) String categoryKey,
+        @RequestParam(defaultValue = "20") int limit,
+        @RequestParam(required = false) Long beforeTime,
+        @RequestParam(required = false) String beforeId,
+        @RequestParam(required = false) Double latitude,
+        @RequestParam(required = false) Double longitude
+    ) {
+        AuthContext.requireUserId();
+        return ApiResponse.success(postSearchService.search(keyword, categoryKey, limit,
+            beforeTime, beforeId, latitude, longitude));
     }
 
     @GetMapping
@@ -70,8 +98,17 @@ public class PostController {
             AuthContext.requireUserId(),
             request.content(),
             request.images(),
+            request.videoUrl(),
+            request.videoUrls(),
             request.categoryKey(),
-            request.customTags()
+            request.customTags(),
+            request.latitude(),
+            request.longitude(),
+            request.country(),
+            request.province(),
+            request.city(),
+            request.district(),
+            request.locationLabel()
         ));
     }
 
@@ -85,11 +122,13 @@ public class PostController {
         @PathVariable String postId,
         @RequestBody CreateCommentRequest request
     ) {
-        return ApiResponse.success(postService.addComment(
+        return ApiResponse.success(commentSends.comment(
             AuthContext.requireUserId(),
             postId,
+            request.clientRequestId(),
             request.message(),
-            request.imageUrls()
+            request.imageUrls(),
+            request.commenterProvince()
         ));
     }
 
@@ -98,9 +137,10 @@ public class PostController {
         @PathVariable String postId,
         @RequestBody CreateReplyRequest request
     ) {
-        return ApiResponse.success(postService.addReply(
+        return ApiResponse.success(commentSends.reply(
             AuthContext.requireUserId(),
             postId,
+            request.clientRequestId(),
             request.parentCommentId(),
             request.parentReplyId(),
             request.message(),
@@ -112,15 +152,24 @@ public class PostController {
     public record CreatePostRequest(
         @NotBlank(message = "content is required") String content,
         List<String> images,
+        String videoUrl,
+        @jakarta.validation.constraints.Size(max = 9) List<@NotBlank String> videoUrls,
         String categoryKey,
-        List<String> customTags
+        List<String> customTags,
+        Double latitude,
+        Double longitude,
+        String country,
+        String province,
+        String city,
+        String district,
+        String locationLabel
     ) {
     }
 
     public record LikeRequest(boolean liked) {
     }
 
-    public record CreateCommentRequest(String message, List<String> imageUrls) {
+    public record CreateCommentRequest(String message, List<String> imageUrls, String commenterProvince, String clientRequestId) {
     }
 
     public record CreateReplyRequest(
@@ -128,7 +177,8 @@ public class PostController {
         Long parentReplyId,
         String message,
         List<String> imageUrls,
-        long beCommenterId
+        long beCommenterId,
+        String clientRequestId
     ) {
     }
 }

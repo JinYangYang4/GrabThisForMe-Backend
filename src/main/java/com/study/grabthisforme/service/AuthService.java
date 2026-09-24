@@ -7,6 +7,7 @@ import com.study.grabthisforme.common.IdGenerator;
 import com.study.grabthisforme.persistence.entity.UserAccountEntity;
 import com.study.grabthisforme.persistence.entity.UserProfileEntity;
 import com.study.grabthisforme.persistence.entity.UserStatisticsEntity;
+import com.study.grabthisforme.persistence.entity.AuthSessionRevokedReason;
 import com.study.grabthisforme.persistence.repository.UserAccountRepository;
 import com.study.grabthisforme.persistence.repository.UserProfileRepository;
 import com.study.grabthisforme.persistence.repository.UserStatisticsRepository;
@@ -51,7 +52,8 @@ public class AuthService {
         String password,
         String displayName,
         String phone,
-        String email
+        String email,
+        String deviceName
     ) {
         userAccountRepository.findByAccountName(accountName).ifPresent(user -> {
             throw new ApiException(HttpStatus.CONFLICT, 40901, "Account name already exists");
@@ -78,19 +80,64 @@ public class AuthService {
             null
         ));
         userStatisticsRepository.save(new UserStatisticsEntity(userId, 0L, 0L, 0L));
-        return buildAuthResult(userId);
+        return buildAuthResult(tokenService.createSession(userId, deviceName), userId);
     }
 
     @Transactional
-    public AuthResult login(String identifier, String password) {
-        UserAccountEntity account = findAccount(identifier)
+    public AuthResult register(String accountName, String password, String displayName, String phone, String email) {
+        return register(accountName, password, displayName, phone, email, null);
+    }
+
+    @Transactional
+    public AuthResult login(String identifier, String password, String deviceName) {
+        UserAccountEntity located = findAccount(identifier)
+            .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, 40105, "Account not found"));
+        UserAccountEntity account = userAccountRepository.findForUpdate(located.userId)
             .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, 40105, "Account not found"));
         if (!passwordService.matches(password, account.passwordHash)) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, 40106, "Password incorrect");
         }
         account.lastLoginTime = System.currentTimeMillis();
         userAccountRepository.save(account);
-        return buildAuthResult(account.userId);
+        return buildAuthResult(tokenService.replaceActiveSession(account.userId, deviceName), account.userId);
+    }
+
+    @Transactional
+    public AuthResult login(String identifier, String password) {
+        return login(identifier, password, null);
+    }
+
+    @Transactional
+    public AuthResult changePassword(long userId, String sessionId, String currentPassword, String newPassword) {
+        var account=userAccountRepository.findForUpdate(userId)
+            .orElseThrow(()->new ApiException(HttpStatus.UNAUTHORIZED,40105,"Account not found"));
+        if (!passwordService.matches(currentPassword,account.passwordHash))
+            throw new ApiException(HttpStatus.BAD_REQUEST,40008,"Current password incorrect");
+        if (newPassword.equals(currentPassword))
+            throw new ApiException(HttpStatus.BAD_REQUEST,40009,"New password must be different");
+        account.passwordHash=passwordService.hash(newPassword);
+        account.tokenVersion=(account.tokenVersion==null?0:account.tokenVersion)+1;
+        userAccountRepository.saveAndFlush(account);
+        return buildAuthResult(tokenService.rotateCurrentSession(userId, sessionId), userId);
+    }
+
+    @Transactional
+    public AuthResult changePassword(long userId, String currentPassword, String newPassword) {
+        var account=userAccountRepository.findForUpdate(userId)
+            .orElseThrow(()->new ApiException(HttpStatus.UNAUTHORIZED,40105,"Account not found"));
+        if (!passwordService.matches(currentPassword,account.passwordHash))
+            throw new ApiException(HttpStatus.BAD_REQUEST,40008,"Current password incorrect");
+        if (newPassword.equals(currentPassword))
+            throw new ApiException(HttpStatus.BAD_REQUEST,40009,"New password must be different");
+        account.passwordHash=passwordService.hash(newPassword);
+        account.tokenVersion=(account.tokenVersion==null?0:account.tokenVersion)+1;
+        userAccountRepository.saveAndFlush(account);
+        return buildAuthResult(tokenService.rotateActiveSession(userId), userId);
+    }
+
+    @Transactional
+    public void logout(long userId, String sessionId) {
+        tokenService.revokeCurrentSession(userId, sessionId, AuthSessionRevokedReason.USER_LOGOUT, false);
     }
 
     public UserView me(long userId) {
@@ -113,10 +160,38 @@ public class AuthService {
         }
     }
 
-    private AuthResult buildAuthResult(long userId) {
-        return new AuthResult(tokenService.issueToken(userId), viewAssembler.getUserView(userId));
+    public TokenService.SessionTokens refresh(String refreshToken) {
+        return tokenService.refresh(refreshToken);
     }
 
-    public record AuthResult(String token, UserView user) {
+
+    @Transactional
+    public void logout(long userId) {
+        tokenService.revokeAllSessions(userId, AuthSessionRevokedReason.USER_LOGOUT, false);
+    }
+
+    private AuthResult buildAuthResult(TokenService.SessionTokens tokens, long userId) {
+        return new AuthResult(
+            tokens.accessToken(),
+            tokens.accessTokenExpiresIn(),
+            tokens.refreshToken(),
+            tokens.refreshTokenExpiresIn(),
+            tokens.sessionId(),
+            viewAssembler.getUserView(userId)
+        );
+    }
+
+    public record AuthResult(
+        String accessToken,
+        long accessTokenExpiresIn,
+        String refreshToken,
+        long refreshTokenExpiresIn,
+        String sessionId,
+        UserView user
+    ) {
+        /** Keeps older Java tests source-compatible while JSON exposes accessToken. */
+        public String token() {
+            return accessToken;
+        }
     }
 }

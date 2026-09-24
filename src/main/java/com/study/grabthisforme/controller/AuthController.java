@@ -29,13 +29,21 @@ public class AuthController {
             request.password(),
             request.displayName(),
             request.phone(),
-            request.email()
+            request.email(),
+            request.deviceName()
         ));
     }
 
     @PostMapping("/login")
     public ApiResponse<AuthService.AuthResult> login(@Valid @RequestBody LoginRequest request) {
-        return ApiResponse.success(authService.login(request.identifier(), request.password()));
+        return ApiResponse.success(authService.login(request.identifier(), request.password(), request.deviceName()));
+    }
+
+    @PostMapping("/refresh")
+    public ApiResponse<com.study.grabthisforme.auth.TokenService.SessionTokens> refresh(
+        @Valid @RequestBody RefreshRequest request
+    ) {
+        return ApiResponse.success(authService.refresh(request.refreshToken()));
     }
 
     @GetMapping("/me")
@@ -48,13 +56,18 @@ public class AuthController {
         @NotBlank(message = "password is required") String password,
         String displayName,
         String phone,
-        String email
+        String email,
+        String deviceName
     ) {
     }
 
     public record LoginRequest(
         @NotBlank(message = "identifier is required") String identifier,
-        @NotBlank(message = "password is required") String password
+        @NotBlank(message = "password is required") String password,
+        String deviceName
     ) {
+    }
+
+    public record RefreshRequest(@NotBlank(message = "refreshToken is required") String refreshToken) {
     }
 }

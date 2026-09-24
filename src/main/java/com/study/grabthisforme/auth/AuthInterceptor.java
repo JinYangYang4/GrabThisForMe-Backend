@@ -29,7 +29,7 @@ public class AuthInterceptor implements HandlerInterceptor {
             );
         }
         AuthenticatedUser authenticatedUser = tokenService.parse(authorization.substring(7));
-        AuthContext.setUserId(authenticatedUser.userId());
+        AuthContext.setIdentity(authenticatedUser.userId(), authenticatedUser.sessionId());
         return true;
     }
 

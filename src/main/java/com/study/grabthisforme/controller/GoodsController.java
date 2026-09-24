@@ -90,6 +90,11 @@ public class GoodsController {
     ) {
     }
 
+    @org.springframework.web.bind.annotation.PatchMapping("/{goodsId}/secondhand-status")
+    public ApiResponse<GoodsView> updateSecondhandStatus(@PathVariable long goodsId, @RequestBody SecondhandStatusRequest r) {
+        return ApiResponse.success(goodsService.updateSecondhandStatus(AuthContext.requireUserId(),goodsId,r.status()));
+    }
+    public record SecondhandStatusRequest(int status) {}
     public record LikeRequest(boolean liked) {
     }
 }

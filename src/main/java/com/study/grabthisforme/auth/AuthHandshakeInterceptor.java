@@ -29,18 +29,17 @@ public class AuthHandshakeInterceptor implements HandshakeInterceptor {
         if (!(request instanceof ServletServerHttpRequest servletRequest)) {
             return false;
         }
-        String token = servletRequest.getServletRequest().getParameter("token");
-        if (token == null || token.isBlank()) {
-            String authorization = servletRequest.getServletRequest().getHeader("Authorization");
-            if (authorization != null && authorization.startsWith("Bearer ")) {
-                token = authorization.substring(7);
-            }
+        String token = null;
+        String authorization = servletRequest.getServletRequest().getHeader("Authorization");
+        if (authorization != null && authorization.startsWith("Bearer ")) {
+            token = authorization.substring(7);
         }
         if (token == null || token.isBlank()) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, 40101, "Missing websocket token");
         }
         AuthenticatedUser authenticatedUser = tokenService.parse(token);
         attributes.put("userId", authenticatedUser.userId());
+        attributes.put("authSessionId", authenticatedUser.sessionId());
         return true;
     }
 

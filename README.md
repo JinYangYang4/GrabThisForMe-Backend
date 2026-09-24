@@ -70,17 +70,33 @@ src/main/java/com/study/grabthisforme/
 
 ## 认证与 Token
 
-后端登录成功后返回 token，前端后续请求需要在请求头中携带：
+后端登录成功后返回 15 分钟随机 Access Token、30 天滑动 Refresh Token 和 Session ID。前端业务请求携带：
 
 ```http
-Authorization: Bearer <token>
+Authorization: Bearer <accessToken>
 ```
 
-当前 token 机制由 `auth/TokenService.java` 负责，特点：
+当前认证机制由 `auth/TokenService.java` 负责，特点：
 
-- token 内含 `userId` 和过期时间
-- 使用 `HmacSHA256` 签名
-- 默认过期时间来自配置 `grabthisforme.auth.token-expire-hours`
+- Access Token 与 Refresh Token 均为至少 256 位安全随机数，客户端无法解析
+- 服务端只保存 `SHA-256(token)`，不保存明文 Token
+- `auth_session` 保存设备会话和当前 Access Token 哈希
+- `auth_refresh_token` 保存 Refresh Token 的代际、使用和替换关系
+- Refresh Token 每次使用后轮换；旧 Token 再次出现会撤销该 Session
+- 同一账号只允许一个 `ACTIVE` Session，新登录会在事务中撤销旧 Session
+- Access Token 有效期 15 分钟，Refresh Token 空闲期 30 天，会话绝对期限 90 天
+- STOMP WebSocket 握手只从 `Authorization: Bearer <accessToken>` 读取凭证，使用 `sessionId` 作为 Principal，顶号消息只发送给旧 Session
+
+升级说明：从旧 HMAC 摘要版本升级后，已有 Access Token 和 Refresh Token 无法继续校验，用户需要重新登录。账号、密码和业务数据不变；不要清空数据库。服务端重启不会使新版本签发的令牌失效（仍受原有会话过期和撤销规则约束）。旧启动脚本需移除密钥长度判断，不能只替换 JAR。
+
+刷新接口：
+
+```http
+POST /api/auth/refresh
+Content-Type: application/json
+
+{"refreshToken":"rt_xxx"}
+```
 
 如果请求缺少 token，接口会返回类似：
 
@@ -108,8 +124,11 @@ src/main/resources/application.properties
 - 数据源：`jdbc:h2:file:./data/grabthisforme;MODE=MySQL;AUTO_SERVER=TRUE;DB_CLOSE_DELAY=-1`
 - H2 Console：`/h2-console`
 - JPA：`ddl-auto=update`
-- token secret：`grabthisforme.auth.token-secret`
-- token 过期小时数：`grabthisforme.auth.token-expire-hours=168`
+- Token 摘要：SHA-256，无需配置服务端 Token 密钥；随机令牌、登录鉴权和会话权限校验仍保留
+- Access Token：`grabthisforme.auth.access-token-expire-seconds=900`
+- Refresh Token：`grabthisforme.auth.refresh-token-expire-seconds=2592000`
+- Session 绝对期限：`grabthisforme.auth.session-absolute-expire-days=90`
+- 撤销记录保留：`grabthisforme.auth.revoked-retention-days=30`
 - CORS：`grabthisforme.cors.allowed-origins=*`
 
 ## 本地运行

@@ -23,11 +23,11 @@ import com.study.grabthisforme.persistence.entity.StoreGoodsCategoryItemEntity;
 import com.study.grabthisforme.persistence.entity.StoreTagEntity;
 import com.study.grabthisforme.persistence.entity.UserAccountEntity;
 import com.study.grabthisforme.persistence.entity.UserFriendRelationEntity;
-import com.study.grabthisforme.persistence.entity.UserGroupRelationEntity;
 import com.study.grabthisforme.persistence.entity.UserPostEntity;
 import com.study.grabthisforme.persistence.entity.UserProfileEntity;
 import com.study.grabthisforme.persistence.entity.UserStatisticsEntity;
 import com.study.grabthisforme.persistence.repository.ChatGroupRepository;
+import com.study.grabthisforme.service.OrderService;
 import com.study.grabthisforme.persistence.repository.ConversationParticipantRepository;
 import com.study.grabthisforme.persistence.repository.ConversationRepository;
 import com.study.grabthisforme.persistence.repository.ConversationUserStateRepository;
@@ -47,7 +47,6 @@ import com.study.grabthisforme.persistence.repository.StoreRepository;
 import com.study.grabthisforme.persistence.repository.StoreTagRepository;
 import com.study.grabthisforme.persistence.repository.UserAccountRepository;
 import com.study.grabthisforme.persistence.repository.UserFriendRelationRepository;
-import com.study.grabthisforme.persistence.repository.UserGroupRelationRepository;
 import com.study.grabthisforme.persistence.repository.UserPostRepository;
 import com.study.grabthisforme.persistence.repository.UserProfileRepository;
 import com.study.grabthisforme.persistence.repository.UserStatisticsRepository;
@@ -78,7 +77,7 @@ public class DataSeeder {
         UserPostRepository userPostRepository,
         UserFriendRelationRepository userFriendRelationRepository,
         ChatGroupRepository chatGroupRepository,
-        UserGroupRelationRepository userGroupRelationRepository,
+        com.study.grabthisforme.service.ConversationMembershipService membership,
         ConversationRepository conversationRepository,
         ConversationParticipantRepository conversationParticipantRepository,
         ConversationUserStateRepository conversationUserStateRepository,
@@ -105,9 +104,9 @@ public class DataSeeder {
             userProfileRepository.save(new UserProfileEntity(userB, "Bob", "", "13800000002", "bob@example.com", 1, false, "随叫随到"));
             userProfileRepository.save(new UserProfileEntity(userC, "Carol", "", "13800000003", "carol@example.com", 2, false, "闲置出清"));
 
-            userStatisticsRepository.save(new UserStatisticsEntity(userA, 18L, 5L, 12L));
-            userStatisticsRepository.save(new UserStatisticsEntity(userB, 9L, 2L, 4L));
-            userStatisticsRepository.save(new UserStatisticsEntity(userC, 6L, 1L, 3L));
+            userStatisticsRepository.save(new UserStatisticsEntity(userA, 18L, 0L, 0L));
+            userStatisticsRepository.save(new UserStatisticsEntity(userB, 9L, 0L, 0L));
+            userStatisticsRepository.save(new UserStatisticsEntity(userC, 6L, 0L, 0L));
 
             long storeId = 20001L;
             storeRepository.save(new StoreEntity(
@@ -164,27 +163,15 @@ public class DataSeeder {
             postStatsRepository.save(postStats);
             userPostRepository.save(new UserPostEntity(userA, post.postId));
 
-            userFriendRelationRepository.save(new UserFriendRelationEntity(userA, userB, "FRIEND", now));
-            userFriendRelationRepository.save(new UserFriendRelationEntity(userB, userA, "FRIEND", now));
+            userFriendRelationRepository.save(new UserFriendRelationEntity(userA, userB, now));
+            userFriendRelationRepository.save(new UserFriendRelationEntity(userB, userA, now));
 
-            ChatGroupEntity group = new ChatGroupEntity();
-            group.groupId = 40001L;
-            group.groupName = "宿舍拼单群";
-            group.createTime = now;
-            chatGroupRepository.save(group);
-            userGroupRelationRepository.save(new UserGroupRelationEntity(userA, group.groupId, "OWNER", now));
-            userGroupRelationRepository.save(new UserGroupRelationEntity(userB, group.groupId, "MEMBER", now));
-            userGroupRelationRepository.save(new UserGroupRelationEntity(userC, group.groupId, "MEMBER", now));
-
-            ConversationEntity singleConversation = new ConversationEntity();
-            singleConversation.conversationId = idGenerator.nextConversationId();
-            singleConversation.conversationType = "SINGLE";
-            singleConversation.targetId = userB;
-            singleConversation.lastTime = now;
-            conversationRepository.save(singleConversation);
+            membership.createGroup(userA,"宿舍拼单群",java.util.List.of(userB,userC),"bootstrap");
+            ConversationEntity singleConversation = membership.direct(userA,userB);
 
             MessageEntity message = new MessageEntity();
             message.messageId = idGenerator.nextMessageId();
+            message.clientMsgId = message.messageId;
             message.conversationId = singleConversation.conversationId;
             message.senderId = userA;
             message.type = "TEXT";
@@ -195,10 +182,12 @@ public class DataSeeder {
             singleConversation.lastMessageId = message.messageId;
             conversationRepository.save(singleConversation);
 
-            conversationParticipantRepository.save(new ConversationParticipantEntity(singleConversation.conversationId, userA, "", now, 0));
-            conversationParticipantRepository.save(new ConversationParticipantEntity(singleConversation.conversationId, userB, "", now, 1));
-            conversationUserStateRepository.save(new ConversationUserStateEntity(singleConversation.conversationId, userA, 0, false));
-            conversationUserStateRepository.save(new ConversationUserStateEntity(singleConversation.conversationId, userB, 1, false));
+            conversationUserStateRepository.save(
+                new ConversationUserStateEntity(singleConversation.conversationId, userA, 0, false, now)
+            );
+            conversationUserStateRepository.save(
+                new ConversationUserStateEntity(singleConversation.conversationId, userB, 1, false, null)
+            );
 
             OrderEntity order = new OrderEntity();
             order.orderId = "ORD_BOOTSTRAP";
@@ -220,6 +209,7 @@ public class DataSeeder {
             order.endTime = now + 3_600_000L;
             order.orderStatus = 1;
             order.isAccepted = true;
+            order.errandType = OrderService.BUY_GOODS;
             orderRepository.save(order);
         };
     }

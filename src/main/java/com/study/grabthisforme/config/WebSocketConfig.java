@@ -1,11 +1,13 @@
 package com.study.grabthisforme.config;
 
 import com.study.grabthisforme.auth.AuthHandshakeInterceptor;
+import com.study.grabthisforme.auth.AuthSessionChannelInterceptor;
 import com.study.grabthisforme.auth.StompPrincipal;
 import java.security.Principal;
 import java.util.Map;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
+import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
@@ -16,9 +18,14 @@ import org.springframework.web.socket.server.support.DefaultHandshakeHandler;
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     private final AuthHandshakeInterceptor authHandshakeInterceptor;
+    private final AuthSessionChannelInterceptor authSessionChannelInterceptor;
 
-    public WebSocketConfig(AuthHandshakeInterceptor authHandshakeInterceptor) {
+    public WebSocketConfig(
+        AuthHandshakeInterceptor authHandshakeInterceptor,
+        AuthSessionChannelInterceptor authSessionChannelInterceptor
+    ) {
         this.authHandshakeInterceptor = authHandshakeInterceptor;
+        this.authSessionChannelInterceptor = authSessionChannelInterceptor;
     }
 
     @Override
@@ -33,7 +40,8 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                     Map<String, Object> attributes
                 ) {
                     Object userId = attributes.get("userId");
-                    return new StompPrincipal(String.valueOf(userId));
+                    Object authSessionId = attributes.get("authSessionId");
+                    return new StompPrincipal(String.valueOf(authSessionId), Long.parseLong(String.valueOf(userId)));
                 }
             })
             .setAllowedOriginPatterns("*");
@@ -44,5 +52,10 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         registry.enableSimpleBroker("/topic", "/queue");
         registry.setApplicationDestinationPrefixes("/app");
         registry.setUserDestinationPrefix("/user");
+    }
+
+    @Override
+    public void configureClientInboundChannel(ChannelRegistration registration) {
+        registration.interceptors(authSessionChannelInterceptor);
     }
 }

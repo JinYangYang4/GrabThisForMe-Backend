@@ -1,136 +1,127 @@
 package com.study.grabthisforme.service;
-
 import com.study.grabthisforme.common.ApiException;
-import com.study.grabthisforme.common.IdGenerator;
+import com.study.grabthisforme.controller.OrderController.CreateOrderRequest;
 import com.study.grabthisforme.persistence.entity.OrderEntity;
 import com.study.grabthisforme.persistence.repository.OrderRepository;
-import com.study.grabthisforme.service.view.GoodsView;
+import com.study.grabthisforme.persistence.repository.UserAccountRepository;
 import com.study.grabthisforme.service.view.OrderView;
-import com.study.grabthisforme.service.view.UserView;
 import jakarta.transaction.Transactional;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 @Service
 public class OrderService {
-
-    private final OrderRepository orderRepository;
-    private final GoodsService goodsService;
-    private final UserService userService;
-    private final IdGenerator idGenerator;
-    private final ViewAssembler viewAssembler;
-
-    public OrderService(
-        OrderRepository orderRepository,
-        GoodsService goodsService,
-        UserService userService,
-        IdGenerator idGenerator,
-        ViewAssembler viewAssembler
-    ) {
-        this.orderRepository = orderRepository;
-        this.goodsService = goodsService;
-        this.userService = userService;
-        this.idGenerator = idGenerator;
-        this.viewAssembler = viewAssembler;
+    public static final int OPEN=0, ACCEPTED=1, COMPLETED=2, DELIVERED=3, CANCELLED=4;
+    public static final String BUY_GOODS="BUY_GOODS", PICKUP_EXPRESS="PICKUP_EXPRESS";
+    private final OrderRepository orders;
+    private final UserAccountRepository accounts;
+    private final UserService users;
+    private final com.fasterxml.jackson.databind.ObjectMapper json;
+    public OrderService(OrderRepository orders, UserAccountRepository accounts, UserService users, com.fasterxml.jackson.databind.ObjectMapper json) {
+        this.orders=orders; this.accounts=accounts; this.users=users; this.json=json;
     }
-
     public List<OrderView> listOrders(long userId, String role) {
-        List<OrderEntity> result = new ArrayList<>();
-        if ("buyer".equalsIgnoreCase(role)) {
-            result.addAll(orderRepository.findAllByBuyerIdOrderByStartTimeDesc(userId));
-        } else if ("sender".equalsIgnoreCase(role)) {
-            result.addAll(orderRepository.findAllBySenderIdOrderByStartTimeDesc(userId));
-        } else {
-            result.addAll(orderRepository.findAllByBuyerIdOrderByStartTimeDesc(userId));
-            result.addAll(orderRepository.findAllBySenderIdOrderByStartTimeDesc(userId));
-        }
-        return result.stream()
-            .distinct()
-            .sorted(Comparator.comparing(entity -> entity.startTime, Comparator.reverseOrder()))
-            .map(viewAssembler::toOrderView)
-            .toList();
+        if (!Set.of("all", "buyer", "sender").contains(role)) throw bad("Invalid order role");
+        Map<String,OrderEntity> result=new LinkedHashMap<>();
+        if (!role.equals("sender")) orders.findAllByBuyerIdOrderByStartTimeDesc(userId).forEach(e -> result.put(e.orderId,e));
+        if (!role.equals("buyer")) orders.findAllBySenderIdOrderByStartTimeDesc(userId).forEach(e -> result.put(e.orderId,e));
+        return result.values().stream().sorted(Comparator.comparing((OrderEntity e)->e.startTime).reversed())
+            .map(e -> OrderView.from(e,true)).toList();
     }
-
-    public OrderView getOrder(String orderId) {
-        OrderEntity entity = orderRepository.findById(orderId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40431, "Order not found"));
-        return viewAssembler.toOrderView(entity);
+    public List<OrderView> available(long userId, int page, int limit, String errandType) {
+        if (page<0 || limit<1 || limit>100) throw bad("Invalid page size");
+        String normalizedType=normalizeFilterType(errandType);
+        return orders.findAvailable(userId,System.currentTimeMillis(),normalizedType,PageRequest.of(page,limit)).stream()
+            .map(e -> OrderView.from(e,false)).toList();
     }
-
+    public OrderView getOrder(long userId, String id) {
+        OrderEntity e=orders.findById(id).orElseThrow(OrderService::missing);
+        boolean participant=participant(e,userId);
+        if (!participant && (e.orderStatus!=OPEN || e.endTime<=System.currentTimeMillis())) throw forbidden();
+        return OrderView.from(e,participant);
+    }
     @Transactional
-    public OrderView createOrder(
-        long userId,
-        long goodsId,
-        String shelfNumber,
-        String aimPosition,
-        String atPosition,
-        Long startTime,
-        Long endTime
-    ) {
-        UserView buyer = userService.getUser(userId);
-        GoodsView goods = goodsService.getGoods(goodsId);
-        OrderEntity entity = new OrderEntity();
-        entity.orderId = idGenerator.nextOrderId();
-        entity.senderId = null;
-        entity.senderName = "";
-        entity.senderAvatarUrl = "";
-        entity.buyerId = buyer.id();
-        entity.buyerName = buyer.name();
-        entity.buyerAvatarUrl = buyer.headPic();
-        entity.goodsId = goods.id();
-        entity.goodsName = goods.name();
-        entity.goodsMessage = goods.message();
-        entity.goodsPrice = goods.price().discountPrice() != null && goods.price().discountPrice() > 0
-            ? goods.price().discountPrice()
-            : goods.price().price();
-        entity.goodsPic = goods.ui().pic();
-        entity.shelfNumber = shelfNumber;
-        entity.aimPosition = aimPosition;
-        entity.atPosition = atPosition;
-        entity.startTime = startTime == null ? System.currentTimeMillis() : startTime;
-        entity.endTime = endTime == null ? System.currentTimeMillis() + 3_600_000L : endTime;
-        entity.orderStatus = 0;
-        entity.isAccepted = false;
-        orderRepository.save(entity);
-        return viewAssembler.toOrderView(entity);
+    public OrderView createOrder(long userId, CreateOrderRequest r) {
+        String recipientName = r.recipientName() == null ? "" : r.recipientName().trim();
+        String recipientPhone = r.recipientPhone() == null ? "" : r.recipientPhone().trim();
+        boolean hasContact = !recipientName.isEmpty() || !recipientPhone.isEmpty();
+        if (hasContact && (recipientName.isEmpty() || recipientName.length() > 30
+                || recipientName.chars().anyMatch(Character::isISOControl)
+                || !recipientPhone.matches("\\+?[0-9]{7,15}"))) {
+            throw bad("请填写有效的收件人姓名和联系电话");
+        }
+        accounts.findForUpdate(userId).orElseThrow(OrderService::forbidden);
+        String id="ORD_"+UUID.nameUUIDFromBytes((userId+":"+r.clientOrderId()).getBytes(StandardCharsets.UTF_8));
+        var existing=orders.findById(id);
+        String requestHash=hashRequest(r);
+        if (existing.isPresent()) {
+            if (!Objects.equals(existing.get().requestHash,requestHash))
+                throw conflict("The idempotency key was already used for a different request");
+            return OrderView.from(existing.get(),true);
+        }
+        int quantity=r.quantity()==null?1:r.quantity();
+        if (quantity<1 || quantity>99) throw bad("Quantity must be between 1 and 99");
+        long now=System.currentTimeMillis();
+        long start=r.startTime()==null || r.startTime()==0 ? now : r.startTime();
+        long end=r.endTime()==null || r.endTime()==0 ? Math.max(now,start)+3600000 : r.endTime();
+        if (end<=now || end<=start || end-start>7L*24*3600000) throw bad("Invalid service time window");
+        if (!Double.isFinite(r.goodsPrice()) || r.goodsPrice()<0) throw bad("Invalid estimated price");
+        var buyer=users.getUser(userId);
+        OrderEntity e=new OrderEntity(); e.orderId=id; e.buyerId=userId; e.buyerName=buyer.name(); e.buyerAvatarUrl=buyer.headPic();
+        e.requestHash=requestHash; e.quantity=quantity; e.goodsId=0L; e.goodsName=r.goodsName().trim(); e.goodsMessage=r.goodsMessage(); e.goodsPrice=r.goodsPrice(); e.goodsPic=r.goodsPic();
+        e.shelfNumber=r.shelfNumber(); e.aimPosition=r.aimPosition().trim(); e.atPosition=r.atPosition();
+        // Snapshot, not a mutable address-book reference: later edits must not change an order.
+        e.recipientName=recipientName; e.recipientPhone=recipientPhone;
+        e.errandType=normalizeCreateType(r.errandType(),e.goodsName);
+        e.startTime=start; e.endTime=end; e.orderStatus=OPEN; e.isAccepted=false;
+        orders.save(e); return OrderView.from(e,true);
     }
-
     @Transactional
-    public OrderView acceptOrder(long userId, String orderId) {
-        OrderEntity entity = orderRepository.findById(orderId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40431, "Order not found"));
-        if (entity.buyerId.equals(userId)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, 40031, "Buyer cannot accept own order");
-        }
-        UserView sender = userService.getUser(userId);
-        entity.senderId = sender.id();
-        entity.senderName = sender.name();
-        entity.senderAvatarUrl = sender.headPic();
-        entity.isAccepted = true;
-        entity.orderStatus = 1;
-        orderRepository.save(entity);
-        return viewAssembler.toOrderView(entity);
+    public OrderView acceptOrder(long userId,String id) {
+        OrderEntity e=locked(id);
+        if (Objects.equals(e.buyerId,userId)) throw forbidden();
+        if (e.orderStatus==ACCEPTED && Objects.equals(e.senderId,userId)) return OrderView.from(e,true);
+        if (e.orderStatus!=OPEN || e.senderId!=null || e.endTime<=System.currentTimeMillis()) throw conflict("Order is no longer available");
+        var sender=users.getUser(userId); e.senderId=userId; e.senderName=sender.name(); e.senderAvatarUrl=sender.headPic();
+        e.orderStatus=ACCEPTED; e.isAccepted=true; orders.save(e); return OrderView.from(e,true);
     }
-
     @Transactional
-    public OrderView updateStatus(long userId, String orderId, int status) {
-        OrderEntity entity = orderRepository.findById(orderId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40431, "Order not found"));
-        if (!userIdEquals(entity.senderId, userId) && !entity.buyerId.equals(userId)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, 40331, "No permission to update order");
-        }
-        entity.orderStatus = status;
-        if (status >= 1) {
-            entity.isAccepted = true;
-        }
-        orderRepository.save(entity);
-        return viewAssembler.toOrderView(entity);
+    public OrderView updateStatus(long userId,String id,int status) {
+        OrderEntity e=locked(id);
+        boolean buyer=Objects.equals(e.buyerId,userId), sender=Objects.equals(e.senderId,userId);
+        if ((status==DELIVERED && !sender) || ((status==COMPLETED || status==CANCELLED) && !buyer)) throw forbidden();
+        if (!Set.of(DELIVERED,COMPLETED,CANCELLED).contains(status)) throw bad("Unsupported order transition");
+        if (e.orderStatus==status) return OrderView.from(e,true);
+        boolean valid=(status==DELIVERED && e.orderStatus==ACCEPTED) || (status==COMPLETED && e.orderStatus==DELIVERED)
+            || (status==CANCELLED && e.orderStatus==OPEN);
+        if (!valid) throw conflict("Order status has changed; refresh before retrying");
+        e.orderStatus=status; orders.save(e); return OrderView.from(e,true);
     }
-
-    private boolean userIdEquals(Long left, long right) {
-        return left != null && left == right;
+    private String hashRequest(CreateOrderRequest request) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(json.writeValueAsBytes(request)));
+        } catch (java.security.NoSuchAlgorithmException | com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalStateException("Cannot fingerprint order request",ex);
+        }
     }
+    private String normalizeFilterType(String value) {
+        if (value==null || value.isBlank()) return null;
+        if (!Set.of(BUY_GOODS,PICKUP_EXPRESS).contains(value)) throw bad("Invalid errand type");
+        return value;
+    }
+    private String normalizeCreateType(String value,String goodsName) {
+        if (value==null || value.isBlank()) return goodsName.startsWith("快递代取")?PICKUP_EXPRESS:BUY_GOODS;
+        if (!Set.of(BUY_GOODS,PICKUP_EXPRESS).contains(value)) throw bad("Invalid errand type");
+        return value;
+    }
+    private OrderEntity locked(String id) { return orders.findForUpdate(id).orElseThrow(OrderService::missing); }
+    private boolean participant(OrderEntity e,long id) { return Objects.equals(e.buyerId,id)||Objects.equals(e.senderId,id); }
+    private static ApiException missing() { return new ApiException(HttpStatus.NOT_FOUND,40431,"Order not found"); }
+    private static ApiException forbidden() { return new ApiException(HttpStatus.FORBIDDEN,40331,"No permission for this order action"); }
+    private static ApiException bad(String text) { return new ApiException(HttpStatus.BAD_REQUEST,40031,text); }
+    private static ApiException conflict(String text) { return new ApiException(HttpStatus.CONFLICT,40931,text); }
 }

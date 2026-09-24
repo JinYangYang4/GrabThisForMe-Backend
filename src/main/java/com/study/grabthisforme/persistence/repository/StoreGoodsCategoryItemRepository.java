@@ -9,4 +9,6 @@ public interface StoreGoodsCategoryItemRepository extends JpaRepository<StoreGoo
     List<StoreGoodsCategoryItemEntity> findAllByGroupIdIn(List<Long> groupIds);
 
     void deleteAllByGroupId(Long groupId);
+
+    List<StoreGoodsCategoryItemEntity> findAllByGoodsId(Long goodsId);
 }

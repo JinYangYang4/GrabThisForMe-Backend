@@ -3,8 +3,9 @@ package com.study.grabthisforme.controller;
 import com.study.grabthisforme.common.ApiResponse;
 import com.study.grabthisforme.common.AuthContext;
 import com.study.grabthisforme.service.UserService;
+import com.study.grabthisforme.service.view.PostView;
+import com.study.grabthisforme.service.view.UserBriefView;
 import com.study.grabthisforme.service.view.UserGoodsSummaryView;
-import com.study.grabthisforme.service.view.UserPostSummaryView;
 import com.study.grabthisforme.service.view.UserStoreSummaryView;
 import com.study.grabthisforme.service.view.UserView;
 import java.util.List;
@@ -27,7 +28,7 @@ public class UserController {
     }
 
     @GetMapping
-    public ApiResponse<List<UserView>> listUsers(@RequestParam(required = false) String keyword) {
+    public ApiResponse<List<UserBriefView>> listUsers(@RequestParam(required = false) String keyword) {
         return ApiResponse.success(userService.listUsers(keyword));
     }
 
@@ -42,12 +43,12 @@ public class UserController {
     }
 
     @GetMapping("/{userId}/posts")
-    public ApiResponse<List<UserPostSummaryView>> listUserPosts(@PathVariable long userId) {
+    public ApiResponse<List<PostView.PostSummaryView>> listUserPosts(@PathVariable long userId) {
         return ApiResponse.success(userService.listUserPosts(userId));
     }
 
     @GetMapping("/{userId}/likes/posts")
-    public ApiResponse<List<UserPostSummaryView>> listLikedPosts(@PathVariable long userId) {
+    public ApiResponse<List<PostView.PostSummaryView>> listLikedPosts(@PathVariable long userId) {
         return ApiResponse.success(userService.listLikedPosts(userId));
     }
 
@@ -62,7 +63,7 @@ public class UserController {
     }
 
     @PutMapping("/me")
-    public ApiResponse<UserView> updateProfile(@RequestBody UpdateProfileRequest request) {
+    public ApiResponse<UserView> updateProfile(@jakarta.validation.Valid @RequestBody UpdateProfileRequest request) {
         return ApiResponse.success(userService.updateProfile(
             AuthContext.requireUserId(),
             request.name(),
@@ -70,19 +71,19 @@ public class UserController {
             request.phone(),
             request.email(),
             request.gender(),
-            request.isVip(),
+            null,
             request.signature()
         ));
     }
 
     public record UpdateProfileRequest(
-        String name,
-        String avatarUrl,
-        String phone,
-        String email,
-        Integer gender,
+        @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max=64) String name,
+        @jakarta.validation.constraints.Size(max=255) String avatarUrl,
+        @jakarta.validation.constraints.Size(max=32) String phone,
+        @jakarta.validation.constraints.Email @jakarta.validation.constraints.Size(max=128) String email,
+        @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(2) Integer gender,
         Boolean isVip,
-        String signature
+        @jakarta.validation.constraints.Size(max=200) String signature
     ) {
     }
 }

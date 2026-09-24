@@ -7,17 +7,19 @@ import com.study.grabthisforme.persistence.entity.ConversationEntity;
 import com.study.grabthisforme.persistence.entity.ConversationParticipantEntity;
 import com.study.grabthisforme.persistence.entity.ConversationUserStateEntity;
 import com.study.grabthisforme.persistence.entity.MessageEntity;
-import com.study.grabthisforme.persistence.entity.UserGroupRelationEntity;
+
 import com.study.grabthisforme.persistence.repository.ChatGroupRepository;
 import com.study.grabthisforme.persistence.repository.ConversationParticipantRepository;
 import com.study.grabthisforme.persistence.repository.ConversationRepository;
 import com.study.grabthisforme.persistence.repository.ConversationUserStateRepository;
 import com.study.grabthisforme.persistence.repository.MessageRepository;
-import com.study.grabthisforme.persistence.repository.UserGroupRelationRepository;
+
 import com.study.grabthisforme.service.view.ConversationView;
+import com.study.grabthisforme.service.view.ConversationPinView;
 import com.study.grabthisforme.service.view.MessageView;
 import jakarta.transaction.Transactional;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -25,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -36,10 +39,11 @@ public class ConversationService {
     private final ConversationUserStateRepository conversationUserStateRepository;
     private final MessageRepository messageRepository;
     private final ChatGroupRepository chatGroupRepository;
-    private final UserGroupRelationRepository userGroupRelationRepository;
+    private final ConversationMembershipService membership;
     private final IdGenerator idGenerator;
     private final ViewAssembler viewAssembler;
     private final PushService pushService;
+    private final MediaService mediaService;
 
     public ConversationService(
         ConversationRepository conversationRepository,
@@ -47,20 +51,22 @@ public class ConversationService {
         ConversationUserStateRepository conversationUserStateRepository,
         MessageRepository messageRepository,
         ChatGroupRepository chatGroupRepository,
-        UserGroupRelationRepository userGroupRelationRepository,
+        ConversationMembershipService membership,
         IdGenerator idGenerator,
         ViewAssembler viewAssembler,
-        PushService pushService
+        PushService pushService,
+        MediaService mediaService
     ) {
         this.conversationRepository = conversationRepository;
         this.conversationParticipantRepository = conversationParticipantRepository;
         this.conversationUserStateRepository = conversationUserStateRepository;
         this.messageRepository = messageRepository;
         this.chatGroupRepository = chatGroupRepository;
-        this.userGroupRelationRepository = userGroupRelationRepository;
+        this.membership = membership;
         this.idGenerator = idGenerator;
         this.viewAssembler = viewAssembler;
         this.pushService = pushService;
+        this.mediaService = mediaService;
     }
 
     public List<ConversationView> listConversations(long userId) {
@@ -81,97 +87,107 @@ public class ConversationService {
         Map<String, MessageEntity> messages = viewAssembler.loadMessagesByIds(
             conversations.stream().map(entity -> entity.lastMessageId).toList()
         );
+        var users = viewAssembler.getUserBriefViews(participants.values().stream().flatMap(List::stream).map(p->p.userId).distinct().toList());
+        var groups = chatGroupRepository.findAllByConversationIdIn(conversationIds).stream().collect(Collectors.toMap(g->g.conversationId,g->g));
         return conversations.stream()
             .map(entity -> viewAssembler.toConversationView(
                 entity,
                 userId,
                 messages.get(entity.lastMessageId),
                 participants.getOrDefault(entity.conversationId, List.of()),
-                states.get(entity.conversationId)
+                states.get(entity.conversationId), users, groups.get(entity.conversationId)
             ))
-            .filter(view -> !Boolean.TRUE.equals(view.isHidden()))
+            .sorted(Comparator.comparing((ConversationView view) -> view.pinnedAt() != null).reversed()
+                .thenComparing(ConversationView::lastTime, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(ConversationView::pinnedAt, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(ConversationView::conversationId))
             .toList();
     }
 
-    public List<MessageView> listMessages(long userId, String conversationId) {
+    public List<MessageView> listMessages(long userId,String conversationId,Long beforeTime,int limit) {
+        return listMessages(userId,conversationId,beforeTime,null,limit);
+    }
+    public List<MessageView> listMessages(long userId, String conversationId, Long beforeTime, String beforeId, int limit) {
         ensureParticipant(conversationId, userId);
-        return messageRepository.findAllByConversationIdOrderByTimestampAsc(conversationId).stream()
+        int safeLimit = Math.min(Math.max(limit, 1), 100);
+        List<MessageEntity> entities = messageRepository.findMessagePage(
+            conversationId,
+            beforeTime, beforeId,
+            PageRequest.of(0, safeLimit)
+        );
+        Collections.reverse(entities);
+        return entities.stream()
             .map(viewAssembler::toMessageView)
             .toList();
     }
 
     @Transactional
-    public ConversationView createSingleConversation(long userId, long peerUserId) {
-        if (viewAssembler.getUserView(peerUserId) == null) {
-            throw new ApiException(HttpStatus.NOT_FOUND, 40401, "Peer user not found");
-        }
-        ConversationEntity existing = findExistingSingleConversation(userId, peerUserId);
-        if (existing != null) {
-            return buildConversationView(existing, userId);
-        }
-
-        ConversationEntity conversation = new ConversationEntity();
-        conversation.conversationId = idGenerator.nextConversationId();
-        conversation.conversationType = "SINGLE";
-        conversation.targetId = peerUserId;
-        conversation.lastMessageId = null;
-        conversation.lastTime = System.currentTimeMillis();
-        conversationRepository.save(conversation);
-
-        saveParticipants(conversation.conversationId, List.of(userId, peerUserId));
-        saveStateIfAbsent(conversation.conversationId, userId);
-        saveStateIfAbsent(conversation.conversationId, peerUserId);
-        return buildConversationView(conversation, userId);
+    public ConversationView createSingleConversation(long userId,long peerUserId) {
+        return buildConversationView(membership.direct(userId,peerUserId),userId);
+    }
+    @Transactional
+    public ConversationView createGroupConversation(long userId,String groupName,List<Long> memberIds,String key) {
+        var group=membership.createGroup(userId,groupName,memberIds,key);
+        return buildConversationView(conversationRepository.findById(group.conversationId).orElseThrow(),userId);
+    }
+    @Transactional
+    public ConversationView createGroupConversation(long userId,String groupName,List<Long> memberIds) {
+        return createGroupConversation(userId,groupName,memberIds,java.util.UUID.randomUUID().toString());
+    }
+    public ConversationView openGroupConversation(long userId,long groupId) {
+        var group=membership.group(groupId);
+        membership.requireMember(group.conversationId,userId);
+        return buildConversationView(conversationRepository.findById(group.conversationId).orElseThrow(),userId);
     }
 
     @Transactional
-    public ConversationView createGroupConversation(long userId, String groupName, List<Long> memberIds) {
-        Set<Long> distinctMembers = new LinkedHashSet<>();
-        distinctMembers.add(userId);
-        if (memberIds != null) {
-            distinctMembers.addAll(memberIds);
-        }
-        for (Long memberId : distinctMembers) {
-            if (viewAssembler.getUserView(memberId) == null) {
-                throw new ApiException(HttpStatus.NOT_FOUND, 40401, "Member user not found: " + memberId);
-            }
-        }
-
-        long groupId = idGenerator.nextLongId();
-        ChatGroupEntity group = new ChatGroupEntity();
-        group.groupId = groupId;
-        group.groupName = groupName;
-        group.createTime = System.currentTimeMillis();
-        chatGroupRepository.save(group);
-
-        for (Long memberId : distinctMembers) {
-            userGroupRelationRepository.save(new UserGroupRelationEntity(
-                memberId,
-                groupId,
-                memberId.equals(userId) ? "OWNER" : "MEMBER",
-                System.currentTimeMillis()
-            ));
-        }
-
-        ConversationEntity conversation = new ConversationEntity();
-        conversation.conversationId = idGenerator.nextConversationId();
-        conversation.conversationType = "GROUP";
-        conversation.targetId = groupId;
-        conversation.lastMessageId = null;
-        conversation.lastTime = System.currentTimeMillis();
-        conversationRepository.save(conversation);
-        saveParticipants(conversation.conversationId, new ArrayList<>(distinctMembers));
-        distinctMembers.forEach(memberId -> saveStateIfAbsent(conversation.conversationId, memberId));
-        return buildConversationView(conversation, userId);
+    public MessageView sendMessage(
+        long userId, String conversationId, String clientMsgId, String type, String content, String mediaUrl
+    ) {
+        return sendMessage(userId, conversationId, clientMsgId, type, content, mediaUrl, null);
     }
 
     @Transactional
-    public MessageView sendMessage(long userId, String conversationId, String type, String content, String mediaUrl) {
+    public MessageView sendMessage(
+        long userId,
+        String conversationId,
+        String clientMsgId,
+        String type,
+        String content,
+        String mediaUrl,
+        String replyToMessageId
+    ) {
         ensureParticipant(conversationId, userId);
-        ConversationEntity conversation = conversationRepository.findById(conversationId)
+        ConversationEntity conversation = conversationRepository.findForUpdate(conversationId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40461, "Conversation not found"));
+
+        MessageEntity existingMessage = messageRepository
+            .findByConversationIdAndSenderIdAndClientMsgId(conversationId, userId, clientMsgId)
+            .orElse(null);
+        if (existingMessage != null) {
+            return viewAssembler.toMessageView(existingMessage);
+        }
+
+        if (clientMsgId == null || clientMsgId.isBlank() || clientMsgId.length() > 100)
+            throw new ApiException(HttpStatus.BAD_REQUEST, 40062, "无效的消息请求标识");
+        if (replyToMessageId != null) {
+            MessageEntity source = messageRepository.findById(replyToMessageId).orElseThrow(() ->
+                new ApiException(HttpStatus.BAD_REQUEST, 40065, "引用消息已过期"));
+            if (!conversationId.equals(source.conversationId) || source.recalledAt != null || "SYSTEM".equals(source.type))
+                throw new ApiException(HttpStatus.BAD_REQUEST, 40065, "不能引用该消息，请取消引用后重试");
+        }
+
+        String messageType=type==null?"TEXT":type;
+        if ("IMAGE".equals(messageType) || "VIDEO".equals(messageType)) {
+            mediaUrl=mediaService.validateChatAttachment(userId,conversationId,mediaUrl,"VIDEO".equals(messageType));
+            content=null;
+        }
+        else if (!"TEXT".equals(messageType) || content==null || content.isBlank() || content.length()>10000 || (mediaUrl!=null && !mediaUrl.isBlank()))
+            throw new ApiException(HttpStatus.BAD_REQUEST,40062,"Invalid message content or type");
+
         MessageEntity message = new MessageEntity();
         message.messageId = idGenerator.nextMessageId();
+        message.clientMsgId = clientMsgId;
         message.conversationId = conversationId;
         message.senderId = userId;
         message.type = type == null ? "TEXT" : type;
@@ -179,6 +195,7 @@ public class ConversationService {
         message.mediaUrl = mediaUrl;
         message.timestamp = System.currentTimeMillis();
         message.status = "SENT";
+        message.replyToMessageId = replyToMessageId;
         messageRepository.save(message);
 
         conversation.lastMessageId = message.messageId;
@@ -190,10 +207,11 @@ public class ConversationService {
         for (Long participantId : participantIds) {
             ConversationUserStateEntity state = conversationUserStateRepository
                 .findByConversationIdAndUserId(conversationId, participantId)
-                .orElseGet(() -> new ConversationUserStateEntity(conversationId, participantId, 0, false));
+                .orElseGet(() -> new ConversationUserStateEntity(conversationId, participantId, 0, false, null));
             if (participantId.equals(userId)) {
                 state.unreadCount = 0;
                 state.isHidden = false;
+                state.lastReadTime = message.timestamp;
             } else {
                 state.unreadCount = (state.unreadCount == null ? 0 : state.unreadCount) + 1;
                 state.isHidden = false;
@@ -206,70 +224,46 @@ public class ConversationService {
         payload.put("type", "conversation.message");
         payload.put("conversationId", conversationId);
         payload.put("message", messageView);
-        pushService.pushConversationMessage(conversationId, participantIds, payload);
+        MessagePushAfterCommit.send(pushService, conversationId, participantIds, payload);
         return messageView;
     }
 
     @Transactional
-    public void markRead(long userId, String conversationId) {
+    public void markRead(long userId, String conversationId, Long lastReadTime) {
         ensureParticipant(conversationId, userId);
+        conversationRepository.findForUpdate(conversationId);
         ConversationUserStateEntity state = conversationUserStateRepository.findByConversationIdAndUserId(conversationId, userId)
-            .orElseGet(() -> new ConversationUserStateEntity(conversationId, userId, 0, false));
+            .orElseGet(() -> new ConversationUserStateEntity(conversationId, userId, 0, false, null));
         state.unreadCount = 0;
-        state.isHidden = false;
+        state.lastReadTime = lastReadTime;
         conversationUserStateRepository.save(state);
     }
 
     @Transactional
     public void setHidden(long userId, String conversationId, boolean hidden) {
+        conversationRepository.findForUpdate(conversationId);
         ensureParticipant(conversationId, userId);
         ConversationUserStateEntity state = conversationUserStateRepository.findByConversationIdAndUserId(conversationId, userId)
-            .orElseGet(() -> new ConversationUserStateEntity(conversationId, userId, 0, hidden));
+            .orElseGet(() -> new ConversationUserStateEntity(conversationId, userId, 0, hidden, null));
         state.isHidden = hidden;
         conversationUserStateRepository.save(state);
     }
 
-    private ConversationEntity findExistingSingleConversation(long userId, long peerUserId) {
-        List<String> myConversationIds = conversationParticipantRepository.findAllByUserId(userId).stream()
-            .map(entity -> entity.conversationId)
-            .toList();
-        for (String conversationId : myConversationIds) {
-            ConversationEntity conversation = conversationRepository.findById(conversationId).orElse(null);
-            if (conversation == null || !"SINGLE".equals(conversation.conversationType)) {
-                continue;
-            }
-            List<ConversationParticipantEntity> participants = conversationParticipantRepository.findAllByConversationIdOrderBySortOrderAsc(conversationId);
-            if (participants.size() == 2) {
-                Set<Long> ids = participants.stream().map(entity -> entity.userId).collect(Collectors.toSet());
-                if (ids.contains(userId) && ids.contains(peerUserId)) {
-                    return conversation;
-                }
-            }
-        }
-        return null;
+    @Transactional
+    public ConversationPinView setPinned(long userId, String conversationId, boolean pinned) {
+        conversationRepository.findForUpdate(conversationId);
+        ensureParticipant(conversationId, userId);
+        ConversationUserStateEntity state = conversationUserStateRepository
+            .findByConversationIdAndUserId(conversationId, userId)
+            .orElseGet(() -> new ConversationUserStateEntity(conversationId, userId, 0, false, null));
+        // Repeated enable requests retain the original tie-break time.
+        state.pinnedAt = pinned ? (state.pinnedAt == null ? System.currentTimeMillis() : state.pinnedAt) : null;
+        conversationUserStateRepository.save(state);
+        return new ConversationPinView(conversationId, userId, state.pinnedAt);
     }
 
-    private void ensureParticipant(String conversationId, long userId) {
-        boolean exists = conversationParticipantRepository.findAllByConversationIdOrderBySortOrderAsc(conversationId).stream()
-            .anyMatch(entity -> entity.userId.equals(userId));
-        if (!exists) {
-            throw new ApiException(HttpStatus.FORBIDDEN, 40361, "You are not in this conversation");
-        }
-    }
-
-    private void saveParticipants(String conversationId, List<Long> userIds) {
-        int index = 0;
-        for (Long memberId : userIds) {
-            conversationParticipantRepository.save(
-                new ConversationParticipantEntity(conversationId, memberId, "", System.currentTimeMillis(), index++)
-            );
-        }
-    }
-
-    private void saveStateIfAbsent(String conversationId, long userId) {
-        if (conversationUserStateRepository.findByConversationIdAndUserId(conversationId, userId).isEmpty()) {
-            conversationUserStateRepository.save(new ConversationUserStateEntity(conversationId, userId, 0, false));
-        }
+    private void ensureParticipant(String conversationId,long userId) {
+        membership.requireMember(conversationId,userId);
     }
 
     private ConversationView buildConversationView(ConversationEntity conversation, long currentUserId) {

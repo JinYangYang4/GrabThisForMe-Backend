@@ -1,97 +1,199 @@
 package com.study.grabthisforme.service;
 
-import com.study.grabthisforme.common.ApiException;
-import com.study.grabthisforme.common.IdGenerator;
-import com.study.grabthisforme.persistence.entity.ChatGroupEntity;
-import com.study.grabthisforme.persistence.entity.UserFriendRelationEntity;
-import com.study.grabthisforme.persistence.entity.UserGroupRelationEntity;
-import com.study.grabthisforme.persistence.repository.ChatGroupRepository;
-import com.study.grabthisforme.persistence.repository.UserFriendRelationRepository;
-import com.study.grabthisforme.persistence.repository.UserGroupRelationRepository;
-import com.study.grabthisforme.service.view.GroupView;
-import com.study.grabthisforme.service.view.UserView;
+import com.study.grabthisforme.common.*;
+import com.study.grabthisforme.persistence.entity.*;
+import com.study.grabthisforme.persistence.repository.*;
+import com.study.grabthisforme.service.view.*;
 import jakarta.transaction.Transactional;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 @Service
 public class SocialService {
+  private final UserFriendRelationRepository friends;
+  private final FriendRequestRepository requests;
+  private final ConversationMembershipService membership;
+  private final ConversationParticipantRepository participants;
+  private final ChatGroupRepository groups;
+  private final ViewAssembler views;
+  private final PushService push;
+  private final MessageRepository messages;
+  private final ConversationRepository conversations;
 
-    private final UserFriendRelationRepository userFriendRelationRepository;
-    private final UserGroupRelationRepository userGroupRelationRepository;
-    private final ChatGroupRepository chatGroupRepository;
-    private final IdGenerator idGenerator;
-    private final ViewAssembler viewAssembler;
+  public SocialService(
+      UserFriendRelationRepository f,
+      FriendRequestRepository r,
+      ConversationMembershipService m,
+      ConversationParticipantRepository p,
+      ChatGroupRepository g,
+      ViewAssembler v,
+      PushService s,
+      MessageRepository msg,
+      ConversationRepository c) {
+    friends = f;
+    requests = r;
+    membership = m;
+    participants = p;
+    groups = g;
+    views = v;
+    push = s;
+    messages = msg;
+    conversations = c;
+  }
 
-    public SocialService(
-        UserFriendRelationRepository userFriendRelationRepository,
-        UserGroupRelationRepository userGroupRelationRepository,
-        ChatGroupRepository chatGroupRepository,
-        IdGenerator idGenerator,
-        ViewAssembler viewAssembler
-    ) {
-        this.userFriendRelationRepository = userFriendRelationRepository;
-        this.userGroupRelationRepository = userGroupRelationRepository;
-        this.chatGroupRepository = chatGroupRepository;
-        this.idGenerator = idGenerator;
-        this.viewAssembler = viewAssembler;
+  public List<FriendView> listFriends(long uid) {
+    var relations = friends.findAllByUserId(uid);
+    var ids = relations.stream().map(f -> f.friendUserId).toList();
+    var users = views.getUserBriefViews(ids);
+    return relations.stream().filter(f -> users.containsKey(f.friendUserId))
+        .map(f -> new FriendView(users.get(f.friendUserId), f.remark)).toList();
+  }
+
+  public List<FriendRequestView> listFriendRequests(
+      long uid, Long before, String beforeId, int limit) {
+    if (before != null && beforeId == null)
+      throw new ApiException(HttpStatus.BAD_REQUEST, 40061, "Complete cursor required");
+    var page =
+        requests.page(uid, before, beforeId, PageRequest.of(0, Math.min(100, Math.max(1, limit))));
+    var users =
+        views.getUserBriefViews(
+            page.stream().map(r -> r.senderId == uid ? r.receiverId : r.senderId).toList());
+    return page.stream()
+        .map(r -> view(r, uid, users.get(r.senderId == uid ? r.receiverId : r.senderId)))
+        .toList();
+  }
+
+  public List<FriendRequestView> listFriendRequests(long uid) {
+    return listFriendRequests(uid, null, null, 100);
+  }
+
+  @Transactional
+  public void addFriend(long uid, long peer) {
+    if (uid == peer) throw new ApiException(HttpStatus.BAD_REQUEST, 40051, "Cannot add yourself");
+    membership.lockUsers(uid, peer);
+    if (friends.findByUserIdAndFriendUserId(uid, peer).isPresent()) return;
+    String pair = Math.min(uid, peer) + ":" + Math.max(uid, peer);
+    var pending = requests.findByPendingPair(pair);
+    if (pending.isPresent()) {
+      if (pending.get().receiverId == uid) acceptLocked(uid, pending.get());
+      return;
     }
+    var r = new FriendRequestEntity();
+    r.requestId = UUID.randomUUID().toString();
+    r.senderId = uid;
+    r.receiverId = peer;
+    r.status = "PENDING";
+    r.createdAt = System.currentTimeMillis();
+    r.pendingPair = pair;
+    requests.save(r);
+    notifyAfterCommit(peer, "friend.request.received", view(r, peer, views.getUserBriefView(uid)));
+  }
 
-    public List<UserView> listFriends(long userId) {
-        return userFriendRelationRepository.findAllByUserId(userId).stream()
-            .map(entity -> viewAssembler.getUserView(entity.friendUserId))
-            .toList();
-    }
+  @Transactional
+  public void acceptFriendRequest(long uid, String requestId) {
+    var first =
+        requests
+            .findById(requestId)
+            .orElseThrow(
+                () -> new ApiException(HttpStatus.NOT_FOUND, 40471, "Friend request not found"));
+    membership.lockUsers(first.senderId, first.receiverId);
+    // Reload after acquiring pair locks; another transaction may have handled the request.
+    entityManager.refresh(first);
+    acceptLocked(uid, first);
+  }
 
-    public List<GroupView> listGroups(long userId) {
-        return userGroupRelationRepository.findAllByUserId(userId).stream()
-            .map(entity -> viewAssembler.toGroupView(entity.groupId))
-            .toList();
-    }
+  @jakarta.persistence.PersistenceContext private jakarta.persistence.EntityManager entityManager;
 
-    @Transactional
-    public void addFriend(long userId, long friendUserId) {
-        if (userId == friendUserId) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, 40051, "Cannot add yourself");
-        }
-        if (viewAssembler.getUserView(friendUserId) == null) {
-            throw new ApiException(HttpStatus.NOT_FOUND, 40401, "Friend user not found");
-        }
-        if (userFriendRelationRepository.findByUserIdAndFriendUserId(userId, friendUserId).isEmpty()) {
-            long now = System.currentTimeMillis();
-            userFriendRelationRepository.save(new UserFriendRelationEntity(userId, friendUserId, "FRIEND", now));
-            userFriendRelationRepository.save(new UserFriendRelationEntity(friendUserId, userId, "FRIEND", now));
-        }
-    }
+  private void acceptLocked(long uid, FriendRequestEntity r) {
+    if (r.receiverId != uid)
+      throw new ApiException(HttpStatus.FORBIDDEN, 40371, "Only receiver may accept");
+    if ("ACCEPTED".equals(r.status)) return;
+    if (!"PENDING".equals(r.status))
+      throw new ApiException(HttpStatus.CONFLICT, 40971, "Request already handled");
+    long now = System.currentTimeMillis();
+    r.status = "ACCEPTED";
+    r.handledAt = now;
+    r.pendingPair = null;
+    requests.save(r);
+    friends.save(new UserFriendRelationEntity(uid, r.senderId, now));
+    friends.save(new UserFriendRelationEntity(r.senderId, uid, now));
+    var c = membership.direct(uid, r.senderId);
+    membership.announceFriendship(c.conversationId, uid, r.requestId);
+    notifyAfterCommit(
+        uid, "friend.request.accepted", view(r, uid, views.getUserBriefView(r.senderId)));
+    notifyAfterCommit(
+        r.senderId, "friend.request.accepted", view(r, r.senderId, views.getUserBriefView(uid)));
+  }
 
-    @Transactional
-    public GroupView createGroup(long userId, String groupName, List<Long> memberIds) {
-        long groupId = idGenerator.nextLongId();
-        ChatGroupEntity group = new ChatGroupEntity();
-        group.groupId = groupId;
-        group.groupName = groupName;
-        group.createTime = System.currentTimeMillis();
-        chatGroupRepository.save(group);
+  @Transactional
+  public void rejectFriendRequest(long uid, String id) {
+    var r =
+        requests
+            .findById(id)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40471, "Request not found"));
+    membership.lockUsers(r.senderId, r.receiverId);
+    entityManager.refresh(r);
+    if (r.receiverId != uid)
+      throw new ApiException(HttpStatus.FORBIDDEN, 40371, "Only receiver may reject");
+    if ("REJECTED".equals(r.status)) return;
+    if (!"PENDING".equals(r.status))
+      throw new ApiException(HttpStatus.CONFLICT, 40971, "Request already handled");
+    r.status = "REJECTED";
+    r.handledAt = System.currentTimeMillis();
+    r.pendingPair = null;
+    requests.save(r);
+  }
 
-        Set<Long> distinctMembers = new LinkedHashSet<>();
-        distinctMembers.add(userId);
-        if (memberIds != null) {
-            distinctMembers.addAll(memberIds);
-        }
-        for (Long memberId : distinctMembers) {
-            if (viewAssembler.getUserView(memberId) == null) {
-                throw new ApiException(HttpStatus.NOT_FOUND, 40401, "Member user not found: " + memberId);
-            }
-            userGroupRelationRepository.save(new UserGroupRelationEntity(
-                memberId,
-                groupId,
-                memberId.equals(userId) ? "OWNER" : "MEMBER",
-                System.currentTimeMillis()
-            ));
-        }
-        return viewAssembler.toGroupView(groupId);
-    }
+  public List<GroupView> listGroups(long uid) {
+    var ids = participants.findAllByUserId(uid).stream().map(p -> p.conversationId).toList();
+    return groups.findAllByConversationIdIn(ids).stream()
+        .map(g -> views.toGroupView(g.groupId, uid))
+        .toList();
+  }
+
+  public List<GroupView> searchGroups(String keyword) {
+    return (keyword == null || keyword.isBlank()
+            ? groups.findAll()
+            : groups.findAllByGroupNameContainingIgnoreCaseOrderByCreateTimeDesc(keyword.trim()))
+        .stream().map(g -> views.toGroupView(g.groupId)).toList();
+  }
+
+  @Transactional
+  public void joinGroup(long uid, long gid) {
+    membership.join(uid, gid);
+  }
+
+  @Transactional
+  public GroupView createGroup(long uid, String name, List<Long> ids, String key) {
+    return views.toGroupView(membership.createGroup(uid, name, ids, key).groupId, uid);
+  }
+
+  @Transactional
+  public GroupView createGroup(long uid, String name, List<Long> ids) {
+    return createGroup(uid, name, ids, UUID.randomUUID().toString());
+  }
+
+  private FriendRequestView view(FriendRequestEntity r, long uid, UserBriefView user) {
+    return new FriendRequestView(
+        r.requestId,
+        r.senderId,
+        r.receiverId,
+        r.status,
+        r.createdAt,
+        r.handledAt,
+        r.senderId == uid ? r.receiverId : r.senderId,
+        user);
+  }
+
+  private void notifyAfterCommit(long uid, String type, FriendRequestView view) {
+    org.springframework.transaction.support.TransactionSynchronizationManager
+        .registerSynchronization(
+            new org.springframework.transaction.support.TransactionSynchronization() {
+              public void afterCommit() {
+                push.pushToUser(uid, type, Map.of("type", type, "friendRequest", view));
+              }
+            });
+  }
 }

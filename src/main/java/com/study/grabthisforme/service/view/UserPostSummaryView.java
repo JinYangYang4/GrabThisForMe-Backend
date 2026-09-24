@@ -7,9 +7,7 @@ public record UserPostSummaryView(
     String content,
     List<String> images,
     Long createTime,
-    Long authorId,
-    String authorName,
-    String authorAvatarUrl,
+    UserBriefView author,
     Integer likeCount,
     Integer commentCount
 ) {

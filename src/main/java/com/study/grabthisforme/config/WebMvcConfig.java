@@ -27,7 +27,12 @@ public class WebMvcConfig implements WebMvcConfigurer {
         registry.addInterceptor(authInterceptor)
             .addPathPatterns("/api/**")
             .excludePathPatterns(
-                "/api/auth/**",
+                // Only credential entry points are anonymous; /api/auth/me requires an identity.
+                "/api/auth/login", "/api/auth/login/",
+                "/api/auth/register", "/api/auth/register/",
+                "/api/auth/refresh", "/api/auth/refresh/",
+                "/api/auth/password-reset/request", "/api/auth/password-reset/request/",
+                "/api/auth/password-reset/confirm", "/api/auth/password-reset/confirm/",
                 "/api/public/**"
             );
     }

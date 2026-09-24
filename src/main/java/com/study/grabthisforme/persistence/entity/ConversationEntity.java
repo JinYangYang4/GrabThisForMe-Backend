@@ -11,7 +11,7 @@ public class ConversationEntity {
     @Id
     public String conversationId;
     public String conversationType;
-    public Long targetId;
+    public Long createdAt;
     public String lastMessageId;
     public Long lastTime;
 

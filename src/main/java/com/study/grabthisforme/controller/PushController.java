@@ -19,6 +19,6 @@ public class PushController {
 
     @GetMapping("/stream")
     public SseEmitter stream() {
-        return pushService.subscribe(AuthContext.requireUserId());
+        return pushService.subscribe(AuthContext.requireUserId(), AuthContext.requireSessionId());
     }
 }

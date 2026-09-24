@@ -21,7 +21,7 @@ import com.study.grabthisforme.persistence.entity.StoreGoodsCategoryEntity;
 import com.study.grabthisforme.persistence.entity.StoreGoodsCategoryItemEntity;
 import com.study.grabthisforme.persistence.entity.StoreTagEntity;
 import com.study.grabthisforme.persistence.entity.UserAccountEntity;
-import com.study.grabthisforme.persistence.entity.UserGroupRelationEntity;
+import com.study.grabthisforme.persistence.entity.ConversationParticipantEntity;
 import com.study.grabthisforme.persistence.entity.UserPostEntity;
 import com.study.grabthisforme.persistence.entity.UserProfileEntity;
 import com.study.grabthisforme.persistence.entity.UserStatisticsEntity;
@@ -41,7 +41,7 @@ import com.study.grabthisforme.persistence.repository.StoreGoodsCategoryReposito
 import com.study.grabthisforme.persistence.repository.StoreRepository;
 import com.study.grabthisforme.persistence.repository.StoreTagRepository;
 import com.study.grabthisforme.persistence.repository.UserAccountRepository;
-import com.study.grabthisforme.persistence.repository.UserGroupRelationRepository;
+import com.study.grabthisforme.persistence.repository.ConversationParticipantRepository;
 import com.study.grabthisforme.persistence.repository.UserLikedPostRepository;
 import com.study.grabthisforme.persistence.repository.UserPostRepository;
 import com.study.grabthisforme.persistence.repository.UserProfileRepository;
@@ -53,6 +53,7 @@ import com.study.grabthisforme.service.view.MessageView;
 import com.study.grabthisforme.service.view.OrderView;
 import com.study.grabthisforme.service.view.PostView;
 import com.study.grabthisforme.service.view.StoreView;
+import com.study.grabthisforme.service.view.UserBriefView;
 import com.study.grabthisforme.service.view.UserView;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -89,7 +90,7 @@ public class ViewAssembler {
     private final PostReplyRepository postReplyRepository;
     private final PostCustomTagRepository postCustomTagRepository;
     private final ChatGroupRepository chatGroupRepository;
-    private final UserGroupRelationRepository userGroupRelationRepository;
+    private final ConversationParticipantRepository conversationParticipantRepository;
 
     public ViewAssembler(
         UserAccountRepository userAccountRepository,
@@ -112,7 +113,7 @@ public class ViewAssembler {
         PostReplyRepository postReplyRepository,
         PostCustomTagRepository postCustomTagRepository,
         ChatGroupRepository chatGroupRepository,
-        UserGroupRelationRepository userGroupRelationRepository
+        ConversationParticipantRepository conversationParticipantRepository
     ) {
         this.userAccountRepository = userAccountRepository;
         this.userProfileRepository = userProfileRepository;
@@ -134,7 +135,7 @@ public class ViewAssembler {
         this.postReplyRepository = postReplyRepository;
         this.postCustomTagRepository = postCustomTagRepository;
         this.chatGroupRepository = chatGroupRepository;
-        this.userGroupRelationRepository = userGroupRelationRepository;
+        this.conversationParticipantRepository = conversationParticipantRepository;
     }
 
     public UserView getUserView(Long userId) {
@@ -189,6 +190,40 @@ public class ViewAssembler {
                     stat == null ? 0L : stat.followCount
                 )
             ));
+        }
+        return result;
+    }
+
+    public UserBriefView getUserBriefView(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        return getUserBriefViews(List.of(userId)).get(userId);
+    }
+
+    public Map<Long, UserBriefView> getUserBriefViews(Collection<Long> userIds) {
+        List<Long> distinctIds = userIds == null ? List.of() : userIds.stream()
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
+        if (distinctIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<Long, UserAccountEntity> accounts = userAccountRepository.findAllByUserIdIn(distinctIds)
+            .stream()
+            .collect(Collectors.toMap(entity -> entity.userId, entity -> entity));
+        Map<Long, UserProfileEntity> profiles = userProfileRepository.findAllByUserIdIn(distinctIds)
+            .stream()
+            .collect(Collectors.toMap(entity -> entity.userId, entity -> entity));
+
+        Map<Long, UserBriefView> result = new LinkedHashMap<>();
+        for (Long userId : distinctIds) {
+            UserAccountEntity account = accounts.get(userId);
+            if (account == null) {
+                continue;
+            }
+            result.put(userId, toUserBriefView(userId, account, profiles.get(userId)));
         }
         return result;
     }
@@ -340,6 +375,7 @@ public class ViewAssembler {
             return null;
         }
         return new MessageView(
+            entity.clientMsgId == null || entity.clientMsgId.isBlank() ? entity.messageId : entity.clientMsgId,
             entity.messageId,
             entity.conversationId,
             entity.senderId,
@@ -347,51 +383,69 @@ public class ViewAssembler {
             entity.content,
             entity.mediaUrl,
             entity.timestamp,
-            entity.status
+            entity.status,
+            entity.replyToMessageId,
+            replyPreview(entity),
+            entity.recalledAt,
+            entity.systemEvent
         );
     }
 
+    private String replyPreview(MessageEntity message) {
+        if (message.replyToMessageId == null) return null;
+        var source = messageRepository.findById(message.replyToMessageId).orElse(null);
+        if (source == null || !java.util.Objects.equals(source.conversationId, message.conversationId)) return "原消息已过期或不可用";
+        if (source.recalledAt != null) return "原消息已撤回";
+        String text = switch (source.type) {
+            case "IMAGE" -> "[图片]";
+            case "VIDEO" -> "[视频]";
+            default -> source.content == null ? "" : source.content;
+        };
+        return text.substring(0, Math.min(text.length(), 160));
+    }
+
     public OrderView toOrderView(OrderEntity entity) {
-        return new OrderView(
-            entity.orderId,
-            getUserView(entity.senderId),
-            getUserView(entity.buyerId),
-            getGoodsView(entity.goodsId),
-            entity.shelfNumber,
-            entity.aimPosition,
-            entity.atPosition,
-            entity.startTime,
-            entity.endTime,
-            entity.orderStatus,
-            entity.isAccepted
-        );
+        return OrderView.from(entity, true);
     }
 
     public PostView.PostSummaryView toPostSummaryView(PostEntity entity) {
         UserPostEntity userPostEntity = userPostRepository.findByPostId(entity.postId);
         Long authorId = userPostEntity == null ? null : userPostEntity.userId;
-        UserView author = getUserView(authorId);
+        UserBriefView author = getUserBriefView(authorId);
         PostStatsEntity postStats = postStatsRepository.findById(entity.postId).orElse(null);
 
         return new PostView.PostSummaryView(
             entity.postId,
             entity.content,
             Jsons.readStringList(entity.imagesJson),
+            entity.videoUrl,
+            postVideoUrls(entity),
             entity.createTime,
             entity.categoryKey == null ? "" : entity.categoryKey,
             getPostCustomTags(entity.postId),
-            authorId == null ? 0L : authorId,
-            author == null ? "" : author.name(),
-            author == null ? "" : author.headPic(),
+            author == null ? defaultUserBriefView(authorId) : author,
             postStats == null ? 0 : postStats.likeCount,
-            postStats == null ? 0 : postStats.commentCount
+            postStats == null ? 0 : postStats.commentCount,
+            entity.latitude,
+            entity.longitude,
+            entity.country == null ? "" : entity.country,
+            entity.province == null ? "" : entity.province,
+            entity.city == null ? "" : entity.city,
+            entity.district == null ? "" : entity.district,
+            entity.locationLabel == null ? "" : entity.locationLabel
         );
+    }
+
+    private List<String> postVideoUrls(PostEntity entity) {
+        var urls = Jsons.readStringList(entity.videoUrlsJson);
+        if (!urls.isEmpty()) return urls;
+        return entity.videoUrl == null || entity.videoUrl.isBlank() ? List.of() : List.of(entity.videoUrl);
     }
 
     public PostView toPostView(PostEntity entity, Long currentUserId) {
         UserPostEntity userPostEntity = userPostRepository.findByPostId(entity.postId);
         Long authorId = userPostEntity == null ? null : userPostEntity.userId;
-        UserView author = getUserView(authorId);
+        UserBriefView author = getUserBriefView(authorId);
         PostStatsEntity postStats = postStatsRepository.findById(entity.postId).orElse(null);
         boolean likedByCurrentUser = currentUserId != null
             && userLikedPostRepository.findByUserIdAndPostId(currentUserId, entity.postId).isPresent();
@@ -400,13 +454,22 @@ public class ViewAssembler {
             entity.postId,
             entity.content,
             Jsons.readStringList(entity.imagesJson),
+            entity.videoUrl,
+            postVideoUrls(entity),
             entity.createTime,
             entity.categoryKey == null ? "" : entity.categoryKey,
             getPostCustomTags(entity.postId),
-            author,
+            author == null ? defaultUserBriefView(authorId) : author,
             postStats == null ? 0 : postStats.likeCount,
             postStats == null ? 0 : postStats.commentCount,
-            likedByCurrentUser
+            likedByCurrentUser,
+            entity.latitude,
+            entity.longitude,
+            entity.country == null ? "" : entity.country,
+            entity.province == null ? "" : entity.province,
+            entity.city == null ? "" : entity.city,
+            entity.district == null ? "" : entity.district,
+            entity.locationLabel == null ? "" : entity.locationLabel
         );
     }
 
@@ -416,8 +479,10 @@ public class ViewAssembler {
             entity.time,
             entity.message,
             Jsons.readStringList(entity.imageUrlsJson),
-            getUserView(entity.commenterId),
-            replyCount
+            getUserBriefView(entity.commenterId) == null ? defaultUserBriefView(entity.commenterId) : getUserBriefView(entity.commenterId),
+            replyCount,
+            entity.commenterProvince == null ? "" : entity.commenterProvince,
+            entity.clientRequestId
         );
     }
 
@@ -429,8 +494,9 @@ public class ViewAssembler {
             entity.time,
             entity.message,
             Jsons.readStringList(entity.imageUrlsJson),
-            getUserView(entity.commenterId),
-            getUserView(entity.beCommenterId)
+            getUserBriefView(entity.commenterId) == null ? defaultUserBriefView(entity.commenterId) : getUserBriefView(entity.commenterId),
+            getUserBriefView(entity.beCommenterId) == null ? defaultUserBriefView(entity.beCommenterId) : getUserBriefView(entity.beCommenterId),
+            entity.clientRequestId
         );
     }
 
@@ -442,26 +508,38 @@ public class ViewAssembler {
         ConversationUserStateEntity state
     ) {
         List<Long> participantIds = participants.stream().map(entity -> entity.userId).toList();
-        Map<Long, UserView> users = getUserViews(participantIds);
-        List<UserView> participantViews = participants.stream()
+        return toConversationView(conversation,currentUserId,lastMessage,participants,state,getUserBriefViews(participantIds),chatGroupRepository.findByConversationId(conversation.conversationId).orElse(null));
+    }
+    public ConversationView toConversationView(ConversationEntity conversation,Long currentUserId,MessageEntity lastMessage,List<ConversationParticipantEntity> participants,ConversationUserStateEntity state,Map<Long,UserBriefView> users,ChatGroupEntity group) {
+        List<UserBriefView> participantViews = participants.stream()
             .map(entity -> users.get(entity.userId))
             .filter(Objects::nonNull)
             .toList();
         return new ConversationView(
             conversation.conversationId,
             conversation.conversationType,
-            conversation.targetId,
+            group==null?null:group.groupId,
+            group==null?null:group.groupName,
+            conversation.createdAt,
             toMessageView(lastMessage),
             conversation.lastTime,
             state == null ? 0 : state.unreadCount,
             state != null && Boolean.TRUE.equals(state.isHidden),
+            state == null ? null : state.lastReadTime,
             conversation.conversationType.equals("SINGLE")
                 ? participantViews.stream().filter(user -> !Objects.equals(user.id(), currentUserId)).toList()
-                : participantViews
+                : participantViews,
+            participants.stream().map(p->new ConversationView.MemberView(p.userId,p.role,p.joinedAt,p.sortOrder,p.nickname)).toList(),
+            state == null ? null : state.pinnedAt,
+            state == null || !Objects.equals(state.userId, currentUserId) ? null : state.groupRemark
         );
     }
 
     public GroupView toGroupView(Long groupId) {
+        return toGroupView(groupId, null);
+    }
+
+    public GroupView toGroupView(Long groupId, Long viewerId) {
         if (groupId == null) {
             return null;
         }
@@ -469,12 +547,13 @@ public class ViewAssembler {
         if (group == null) {
             return null;
         }
-        List<UserGroupRelationEntity> relations = userGroupRelationRepository.findAllByGroupId(groupId);
-        Map<Long, UserView> users = getUserViews(relations.stream().map(entity -> entity.userId).toList());
+        List<ConversationParticipantEntity> relations = conversationParticipantRepository.findAllByConversationIdOrderBySortOrderAsc(group.conversationId);
+        boolean isMember = viewerId != null && relations.stream().anyMatch(m -> Objects.equals(m.userId, viewerId));
+        Map<Long, UserBriefView> users = getUserBriefViews(relations.stream().map(entity -> entity.userId).toList());
         List<GroupView.MemberView> members = relations.stream()
-            .map(entity -> new GroupView.MemberView(entity.userId, entity.role, entity.joinedTime, users.get(entity.userId)))
+            .map(entity -> new GroupView.MemberView(entity.userId, entity.role, entity.joinedAt, users.get(entity.userId), isMember ? entity.nickname : null))
             .toList();
-        return new GroupView(group.groupId, group.groupName, group.createTime, members);
+        return new GroupView(group.groupId, group.conversationId, group.groupName, group.createTime, members);
     }
 
     public Map<String, MessageEntity> loadMessagesByIds(Collection<String> messageIds) {
@@ -487,6 +566,26 @@ public class ViewAssembler {
         }
         return messageRepository.findAllByMessageIdIn(distinctIds).stream()
             .collect(Collectors.toMap(entity -> entity.messageId, entity -> entity));
+    }
+
+    private UserBriefView toUserBriefView(Long userId, UserAccountEntity account, UserProfileEntity profile) {
+        return new UserBriefView(
+            userId,
+            account.accountName,
+            profile == null ? account.accountName : profile.displayName,
+            profile == null ? "" : profile.avatarUrl
+        );
+    }
+
+    private UserBriefView defaultUserBriefView(Long userId) {
+        long resolvedUserId = userId == null ? 0L : userId;
+        String fallbackName = userId == null ? "\u533f\u540d\u7528\u6237" : String.valueOf(userId);
+        return new UserBriefView(
+            resolvedUserId,
+            String.valueOf(resolvedUserId),
+            fallbackName,
+            ""
+        );
     }
 
     private List<String> getPostCustomTags(String postId) {

@@ -16,6 +16,7 @@ public class UserAccountEntity {
     public Boolean isLoginAccount;
     public Long createTime;
     public Long lastLoginTime;
+    public Long tokenVersion = 0L;
 
     public UserAccountEntity() {
     }

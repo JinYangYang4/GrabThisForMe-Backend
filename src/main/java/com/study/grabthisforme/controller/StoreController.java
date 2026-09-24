@@ -6,10 +6,12 @@ import com.study.grabthisforme.service.StoreService;
 import com.study.grabthisforme.service.view.StoreView;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -35,6 +37,11 @@ public class StoreController {
         return ApiResponse.success(storeService.getStore(storeId));
     }
 
+    @GetMapping("/mine")
+    public ApiResponse<List<StoreView>> listMyStores() {
+        return ApiResponse.success(storeService.listStoresByOwner(AuthContext.requireUserId()));
+    }
+
     @PostMapping
     public ApiResponse<StoreView> createStore(@Valid @RequestBody CreateStoreRequest request) {
         return ApiResponse.success(storeService.createStore(
@@ -48,8 +55,36 @@ public class StoreController {
             request.businessHours(),
             request.minOrderAmount(),
             request.deliveryFee(),
+            request.isOpen(),
             request.pic(),
-            request.tags()
+            request.tags(),
+            request.categories()
+        ));
+    }
+
+    @PutMapping("/{storeId}")
+    public ApiResponse<StoreView> updateStore(@PathVariable long storeId,@Valid @RequestBody CreateStoreRequest r) {
+        return ApiResponse.success(storeService.updateStore(AuthContext.requireUserId(),storeId,r));
+    }
+
+    @PutMapping("/{storeId}/categories")
+    public ApiResponse<StoreView> updateCategories(
+        @PathVariable long storeId,
+        @Valid @RequestBody UpdateCategoriesRequest request
+    ) {
+        return ApiResponse.success(storeService.updateCategories(
+            AuthContext.requireUserId(), storeId, request.categories(), request.renamedCategories()
+        ));
+    }
+
+    @PutMapping("/{storeId}/goods/{goodsId}/category")
+    public ApiResponse<StoreView> assignGoodsCategory(
+        @PathVariable long storeId,
+        @PathVariable long goodsId,
+        @RequestBody AssignGoodsCategoryRequest request
+    ) {
+        return ApiResponse.success(storeService.assignGoodsCategory(
+            AuthContext.requireUserId(), storeId, goodsId, request.category()
         ));
     }
 
@@ -68,9 +103,20 @@ public class StoreController {
         String businessHours,
         String minOrderAmount,
         String deliveryFee,
+        Boolean isOpen,
         String pic,
-        List<String> tags
+        List<String> tags,
+        List<String> categories
     ) {
+    }
+
+    public record UpdateCategoriesRequest(
+        @NotNull(message = "categories is required") List<String> categories,
+        java.util.Map<String, String> renamedCategories
+    ) {
+    }
+
+    public record AssignGoodsCategoryRequest(String category) {
     }
 
     public record LikeRequest(boolean liked) {

@@ -46,6 +46,7 @@ public class PostService {
     private final UserLikedPostRepository userLikedPostRepository;
     private final IdGenerator idGenerator;
     private final ViewAssembler viewAssembler;
+    private final MediaService mediaService;
 
     public PostService(
         PostRepository postRepository,
@@ -56,7 +57,8 @@ public class PostService {
         UserPostRepository userPostRepository,
         UserLikedPostRepository userLikedPostRepository,
         IdGenerator idGenerator,
-        ViewAssembler viewAssembler
+        ViewAssembler viewAssembler,
+        MediaService mediaService
     ) {
         this.postRepository = postRepository;
         this.postStatsRepository = postStatsRepository;
@@ -67,6 +69,7 @@ public class PostService {
         this.userLikedPostRepository = userLikedPostRepository;
         this.idGenerator = idGenerator;
         this.viewAssembler = viewAssembler;
+        this.mediaService = mediaService;
     }
 
     public PageView<PostView.PostSummaryView> listPosts(
@@ -171,13 +174,64 @@ public class PostService {
     }
 
     @Transactional
-    public PostView createPost(long userId, String content, List<String> images, String categoryKey, List<String> customTags) {
+    public PostView createPost(long userId, String content, List<String> images, String categoryKey,
+        List<String> customTags, Double latitude, Double longitude, String country, String province,
+        String city, String district, String locationLabel) {
+        return createPost(userId, content, images, null, categoryKey, customTags,
+            latitude, longitude, country, province, city, district, locationLabel);
+    }
+
+    @Transactional
+    public PostView createPost(long userId, String content, List<String> images, String videoUrl, String categoryKey,
+        List<String> customTags, Double latitude, Double longitude, String country, String province,
+        String city, String district, String locationLabel) {
+        return createPost(userId, content, images, videoUrl, null, categoryKey, customTags,
+            latitude, longitude, country, province, city, district, locationLabel);
+    }
+
+    @Transactional
+    public PostView createPost(
+        long userId,
+        String content,
+        List<String> images,
+        String videoUrl,
+        List<String> videoUrls,
+        String categoryKey,
+        List<String> customTags,
+        Double latitude,
+        Double longitude,
+        String country,
+        String province,
+        String city,
+        String district,
+        String locationLabel
+    ) {
+        List<String> requested = videoUrls == null || videoUrls.isEmpty()
+            ? (videoUrl == null || videoUrl.isBlank() ? List.of() : List.of(videoUrl)) : videoUrls;
+        if (requested.size() > 9) throw new ApiException(HttpStatus.BAD_REQUEST, 40071, "每个话题最多添加 9 条视频");
+        if (requested.size() + (images == null ? 0 : images.size()) > 9)
+            throw new ApiException(HttpStatus.BAD_REQUEST, 40071, "图片和视频合计最多 9 项");
+        var validated = new java.util.ArrayList<String>();
+        for (String url : requested) {
+            if (url == null || url.isBlank()) throw new ApiException(HttpStatus.BAD_REQUEST, 40071, "视频地址不能为空");
+            String canonical = mediaService.validatePublicVideo(userId, url);
+            if (!validated.contains(canonical)) validated.add(canonical);
+        }
         PostEntity post = new PostEntity();
+        post.videoUrl = validated.isEmpty() ? null : validated.getFirst();
+        post.videoUrlsJson = Jsons.writeStringList(validated);
         post.postId = idGenerator.nextPostId();
         post.content = content == null ? "" : content.trim();
         post.imagesJson = Jsons.writeStringList(images);
         post.categoryKey = normalizeCategoryKey(categoryKey);
         post.createTime = System.currentTimeMillis();
+        post.latitude = latitude == null ? null : roundCoordinate(latitude);
+        post.longitude = longitude == null ? null : roundCoordinate(longitude);
+        post.country = safeText(country);
+        post.province = safeText(province);
+        post.city = safeText(city);
+        post.district = safeText(district);
+        post.locationLabel = safeLocationLabel(locationLabel, post.country, post.province, post.city, post.district);
         postRepository.save(post);
 
         saveCustomTags(post.postId, customTags, post.createTime);
@@ -215,7 +269,7 @@ public class PostService {
     }
 
     @Transactional
-    public PostView.CommentView addComment(long userId, String postId, String message, List<String> imageUrls) {
+    public PostView.CommentView addComment(long userId, String postId, String message, List<String> imageUrls, String commenterProvince) {
         postRepository.findById(postId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40441, "Post not found"));
         PostCommentEntity entity = new PostCommentEntity();
@@ -227,11 +281,10 @@ public class PostService {
         entity.commenterId = userId;
         entity.commenterName = viewAssembler.getUserView(userId).name();
         entity.commenterAvatarUrl = viewAssembler.getUserView(userId).headPic();
+        entity.commenterProvince = safeText(commenterProvince);
         postCommentRepository.save(entity);
-        PostStatsEntity stats = postStatsRepository.findById(postId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40442, "Post stats not found"));
-        stats.commentCount = stats.commentCount + 1;
-        postStatsRepository.save(stats);
+        if (postStatsRepository.incrementCommentCount(postId) == 0)
+            throw new ApiException(HttpStatus.NOT_FOUND, 40442, "Post stats not found");
         return viewAssembler.toCommentView(entity, 0);
     }
 
@@ -264,10 +317,8 @@ public class PostService {
         entity.beCommenterName = viewAssembler.getUserView(beCommenterId).name();
         entity.beCommenterAvatarUrl = viewAssembler.getUserView(beCommenterId).headPic();
         postReplyRepository.save(entity);
-        PostStatsEntity stats = postStatsRepository.findById(postId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 40442, "Post stats not found"));
-        stats.commentCount = stats.commentCount + 1;
-        postStatsRepository.save(stats);
+        if (postStatsRepository.incrementCommentCount(postId) == 0)
+            throw new ApiException(HttpStatus.NOT_FOUND, 40442, "Post stats not found");
         return viewAssembler.toReplyView(entity);
     }
 
@@ -330,6 +381,28 @@ public class PostService {
             sortOrder++;
         }
         return result;
+    }
+
+    private String safeText(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    private String safeLocationLabel(String locationLabel, String country, String province, String city, String district) {
+        String trimmed = safeText(locationLabel);
+        if (!trimmed.isBlank()) {
+            return trimmed;
+        }
+        if (country != null && !country.isBlank() && !country.contains("中国") && !country.equalsIgnoreCase("China")) {
+            return country.trim();
+        }
+        return List.of(safeText(province), safeText(city), safeText(district)).stream()
+            .filter(text -> !text.isBlank())
+            .distinct()
+            .collect(Collectors.joining(" "));
+    }
+
+    private double roundCoordinate(double coordinate) {
+        return Math.round(coordinate * 100000d) / 100000d;
     }
 
     private record NormalizedTag(String displayTag, String normalizedTag, int sortOrder) {

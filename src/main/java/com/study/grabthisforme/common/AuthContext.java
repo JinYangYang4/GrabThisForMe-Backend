@@ -3,12 +3,18 @@ package com.study.grabthisforme.common;
 public final class AuthContext {
 
     private static final ThreadLocal<Long> USER_ID_HOLDER = new ThreadLocal<>();
+    private static final ThreadLocal<String> SESSION_ID_HOLDER = new ThreadLocal<>();
 
     private AuthContext() {
     }
 
     public static void setUserId(Long userId) {
         USER_ID_HOLDER.set(userId);
+    }
+
+    public static void setIdentity(Long userId, String sessionId) {
+        USER_ID_HOLDER.set(userId);
+        SESSION_ID_HOLDER.set(sessionId);
     }
 
     public static Long getUserId() {
@@ -23,7 +29,16 @@ public final class AuthContext {
         return userId;
     }
 
+    public static String requireSessionId() {
+        String sessionId = SESSION_ID_HOLDER.get();
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new ApiException(org.springframework.http.HttpStatus.UNAUTHORIZED, 40101, "Unauthorized");
+        }
+        return sessionId;
+    }
+
     public static void clear() {
         USER_ID_HOLDER.remove();
+        SESSION_ID_HOLDER.remove();
     }
 }

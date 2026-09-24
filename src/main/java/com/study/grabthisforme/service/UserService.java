@@ -1,44 +1,36 @@
 package com.study.grabthisforme.service;
 
 import com.study.grabthisforme.common.ApiException;
-import com.study.grabthisforme.common.Jsons;
 import com.study.grabthisforme.persistence.entity.GoodsBaseEntity;
 import com.study.grabthisforme.persistence.entity.GoodsPriceEntity;
 import com.study.grabthisforme.persistence.entity.GoodsStateEntity;
 import com.study.grabthisforme.persistence.entity.GoodsUiEntity;
-import com.study.grabthisforme.persistence.entity.PostEntity;
-import com.study.grabthisforme.persistence.entity.PostStatsEntity;
-import com.study.grabthisforme.persistence.entity.StoreEntity;
 import com.study.grabthisforme.persistence.entity.StoreTagEntity;
 import com.study.grabthisforme.persistence.entity.UserAccountEntity;
-import com.study.grabthisforme.persistence.entity.UserLikedGoodsEntity;
-import com.study.grabthisforme.persistence.entity.UserLikedPostEntity;
-import com.study.grabthisforme.persistence.entity.UserLikedStoreEntity;
-import com.study.grabthisforme.persistence.entity.UserPostEntity;
 import com.study.grabthisforme.persistence.entity.UserProfileEntity;
 import com.study.grabthisforme.persistence.repository.GoodsBaseRepository;
 import com.study.grabthisforme.persistence.repository.GoodsPriceRepository;
 import com.study.grabthisforme.persistence.repository.GoodsStateRepository;
 import com.study.grabthisforme.persistence.repository.GoodsUiRepository;
 import com.study.grabthisforme.persistence.repository.PostRepository;
-import com.study.grabthisforme.persistence.repository.PostStatsRepository;
 import com.study.grabthisforme.persistence.repository.StoreRepository;
 import com.study.grabthisforme.persistence.repository.StoreTagRepository;
+import com.study.grabthisforme.persistence.repository.UserAccountRepository;
 import com.study.grabthisforme.persistence.repository.UserLikedGoodsRepository;
 import com.study.grabthisforme.persistence.repository.UserLikedPostRepository;
 import com.study.grabthisforme.persistence.repository.UserLikedStoreRepository;
 import com.study.grabthisforme.persistence.repository.UserPostRepository;
-import com.study.grabthisforme.persistence.repository.UserAccountRepository;
 import com.study.grabthisforme.persistence.repository.UserProfileRepository;
-import com.study.grabthisforme.service.view.UserView;
+import com.study.grabthisforme.service.view.PostView;
+import com.study.grabthisforme.service.view.UserBriefView;
 import com.study.grabthisforme.service.view.UserGoodsSummaryView;
-import com.study.grabthisforme.service.view.UserPostSummaryView;
 import com.study.grabthisforme.service.view.UserStoreSummaryView;
+import com.study.grabthisforme.service.view.UserView;
 import jakarta.transaction.Transactional;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -56,7 +48,6 @@ public class UserService {
     private final UserLikedStoreRepository userLikedStoreRepository;
     private final UserLikedGoodsRepository userLikedGoodsRepository;
     private final PostRepository postRepository;
-    private final PostStatsRepository postStatsRepository;
     private final StoreRepository storeRepository;
     private final StoreTagRepository storeTagRepository;
     private final GoodsBaseRepository goodsBaseRepository;
@@ -73,7 +64,7 @@ public class UserService {
         UserLikedStoreRepository userLikedStoreRepository,
         UserLikedGoodsRepository userLikedGoodsRepository,
         PostRepository postRepository,
-        PostStatsRepository postStatsRepository,
+        com.study.grabthisforme.persistence.repository.PostStatsRepository postStatsRepository,
         StoreRepository storeRepository,
         StoreTagRepository storeTagRepository,
         GoodsBaseRepository goodsBaseRepository,
@@ -89,7 +80,6 @@ public class UserService {
         this.userLikedStoreRepository = userLikedStoreRepository;
         this.userLikedGoodsRepository = userLikedGoodsRepository;
         this.postRepository = postRepository;
-        this.postStatsRepository = postStatsRepository;
         this.storeRepository = storeRepository;
         this.storeTagRepository = storeTagRepository;
         this.goodsBaseRepository = goodsBaseRepository;
@@ -98,11 +88,11 @@ public class UserService {
         this.goodsStateRepository = goodsStateRepository;
     }
 
-    public List<UserView> listUsers(String keyword) {
+    public List<UserBriefView> listUsers(String keyword) {
         String normalizedKeyword = keyword == null ? "" : keyword.trim().toLowerCase(Locale.ROOT);
         return userAccountRepository.findAll().stream()
             .sorted(Comparator.comparing((UserAccountEntity entity) -> entity.createTime).reversed())
-            .map(entity -> viewAssembler.getUserView(entity.userId))
+            .map(entity -> viewAssembler.getUserBriefView(entity.userId))
             .filter(user -> user != null)
             .filter(user -> normalizedKeyword.isBlank()
                 || String.valueOf(user.id()).contains(normalizedKeyword)
@@ -157,45 +147,20 @@ public class UserService {
         return getUser(userId);
     }
 
-    public List<UserPostSummaryView> listUserPosts(long userId) {
+    public List<PostView.PostSummaryView> listUserPosts(long userId) {
         return userPostRepository.findAllByUserId(userId).stream()
-            .map(userPost -> postRepository.findById(userPost.postId).map(post -> {
-                PostStatsEntity stats = postStatsRepository.findById(post.postId).orElse(null);
-                UserView author = viewAssembler.getUserView(userId);
-                return new UserPostSummaryView(
-                    post.postId,
-                    post.content,
-                    Jsons.readStringList(post.imagesJson),
-                    post.createTime,
-                    author == null ? userId : author.id(),
-                    author == null ? null : author.name(),
-                    author == null ? null : author.headPic(),
-                    stats == null ? 0 : stats.likeCount,
-                    stats == null ? 0 : stats.commentCount
-                );
-            }).orElse(null))
+            .map(userPost -> postRepository.findById(userPost.postId)
+                .map(viewAssembler::toPostSummaryView)
+                .orElse(null))
             .filter(java.util.Objects::nonNull)
             .toList();
     }
 
-    public List<UserPostSummaryView> listLikedPosts(long userId) {
+    public List<PostView.PostSummaryView> listLikedPosts(long userId) {
         return userLikedPostRepository.findAllByUserId(userId).stream()
-            .map(entity -> postRepository.findById(entity.postId).map(post -> {
-                PostStatsEntity stats = postStatsRepository.findById(post.postId).orElse(null);
-                UserPostEntity postAuthor = userPostRepository.findByPostId(post.postId);
-                UserView author = postAuthor == null ? null : viewAssembler.getUserView(postAuthor.userId);
-                return new UserPostSummaryView(
-                    post.postId,
-                    post.content,
-                    Jsons.readStringList(post.imagesJson),
-                    post.createTime,
-                    author == null ? 0L : author.id(),
-                    author == null ? null : author.name(),
-                    author == null ? null : author.headPic(),
-                    stats == null ? 0 : stats.likeCount,
-                    stats == null ? 0 : stats.commentCount
-                );
-            }).orElse(null))
+            .map(entity -> postRepository.findById(entity.postId)
+                .map(viewAssembler::toPostSummaryView)
+                .orElse(null))
             .filter(java.util.Objects::nonNull)
             .toList();
     }
